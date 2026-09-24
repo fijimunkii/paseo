@@ -521,17 +521,33 @@ function resolveDecisionConfig(
   env: NodeJS.ProcessEnv,
   persisted: ReturnType<typeof loadPersistedConfig>,
 ): PaseoDaemonConfig["decisions"] {
-  const configured = persisted.decisions?.typesafe;
+  const configured = persisted.decisions;
   if (!configured) {
     return undefined;
   }
 
+  const typesafe = configured.typesafe;
+  const agentCreateEnabled = configured.policies.agentCreate?.enabled === true;
+  if (
+    configured.mode === "enforce" &&
+    agentCreateEnabled &&
+    typesafe?.enabled === true &&
+    typesafe.model === "jev-latest"
+  ) {
+    throw new Error("Enforced decisions require a pinned TypeSafe model instead of jev-latest");
+  }
+
   const apiKey = nonEmptyEnv(env.TYPESAFE_API_KEY);
   return {
-    typesafe: {
-      ...configured,
-      ...(apiKey ? { apiKey } : {}),
-    },
+    ...configured,
+    ...(typesafe
+      ? {
+          typesafe: {
+            ...typesafe,
+            ...(apiKey ? { apiKey } : {}),
+          },
+        }
+      : {}),
   };
 }
 

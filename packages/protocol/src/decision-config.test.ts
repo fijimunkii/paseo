@@ -1,9 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { DecisionConfigSchema, TypeSafeDecisionConfigSchema } from "./decision-config.js";
+import {
+  AgentCreateDecisionPolicyConfigSchema,
+  DecisionConfigSchema,
+  TypeSafeDecisionConfigSchema,
+} from "./decision-config.js";
 
-describe("TypeSafe decision config", () => {
-  test("defaults to disabled with the hosted TypeSafe endpoint", () => {
+describe("decision config", () => {
+  test("defaults TypeSafe transport settings without enabling it", () => {
     expect(TypeSafeDecisionConfigSchema.parse({})).toEqual({
       enabled: false,
       baseUrl: "https://api.typesafe.ai",
@@ -13,9 +17,22 @@ describe("TypeSafe decision config", () => {
     });
   });
 
-  test("accepts explicit connection settings without accepting credentials", () => {
+  test("defaults policy execution to shadow and agent creation to disabled", () => {
+    expect(DecisionConfigSchema.parse({})).toEqual({
+      mode: "shadow",
+      policies: {},
+    });
+    expect(AgentCreateDecisionPolicyConfigSchema.parse({})).toEqual({
+      enabled: false,
+      minimumConfidence: 0.9,
+      failureDisposition: "review",
+    });
+  });
+
+  test("accepts explicit policy and connection settings without accepting credentials", () => {
     expect(
       DecisionConfigSchema.parse({
+        mode: "enforce",
         typesafe: {
           enabled: true,
           baseUrl: "https://typesafe.example.test",
@@ -23,14 +40,29 @@ describe("TypeSafe decision config", () => {
           timeoutMs: 5_000,
           maxConcurrency: 2,
         },
+        policies: {
+          agentCreate: {
+            enabled: true,
+            minimumConfidence: 0.95,
+            failureDisposition: "deny",
+          },
+        },
       }),
     ).toEqual({
+      mode: "enforce",
       typesafe: {
         enabled: true,
         baseUrl: "https://typesafe.example.test",
         model: "jev-1.13.0",
         timeoutMs: 5_000,
         maxConcurrency: 2,
+      },
+      policies: {
+        agentCreate: {
+          enabled: true,
+          minimumConfidence: 0.95,
+          failureDisposition: "deny",
+        },
       },
     });
 
