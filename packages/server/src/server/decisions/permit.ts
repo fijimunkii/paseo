@@ -39,6 +39,7 @@ export class DecisionPermitIssuer {
       throw new Error("Decision permit is missing or already consumed");
     }
     if (record.fingerprint !== expectedFingerprint || permit.fingerprint !== expectedFingerprint) {
+      this.records.delete(permit.id);
       throw new Error("Decision permit does not match the authorized operation");
     }
     if (record.expiresAt !== permit.expiresAt || record.expiresAt <= this.now()) {

@@ -1010,6 +1010,25 @@ describe("browser MCP tools", () => {
     expect(lookupTool(server, "browser_snapshot")).toBeDefined();
   });
 
+  it("applies static create-agent policy before the decision gate", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const authorizeAgentCreate = vi.fn();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      paseoToolPolicy: { disabledTools: ["create_agent"] },
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    expect(lookupTool(server, "create_agent")).toBeUndefined();
+    expect(authorizeAgentCreate).not.toHaveBeenCalled();
+  });
+
   it("filters policy-disabled tools from MCP listing and calls", async () => {
     const agentManager = new BoundaryAgentManagerFake();
     const agentStorage = new BoundaryAgentStorageFake();
@@ -1280,6 +1299,41 @@ describe("create_agent MCP tool", () => {
         (issue: { path: Array<string | number> }) => issue.path[0] === "initialPrompt",
       ),
     ).toBe(true);
+  });
+
+  it("blocks create_agent before workspace or agent side effects when decision policy denies", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const ensureWorkspace = vi.fn(async () => "workspace-should-not-exist");
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: ensureWorkspace,
+      decisionService: {
+        authorizeAgentCreate: vi.fn().mockResolvedValue({
+          fingerprint: "d".repeat(64),
+          mode: "enforce",
+          actualDisposition: { kind: "deny" },
+          wouldDisposition: { kind: "deny" },
+          reused: false,
+          permit: null,
+        }),
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "create_agent").handler({
+        title: "Blocked agent",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Do work",
+        background: true,
+      }),
+    ).rejects.toThrow("Decision policy denied create_agent");
+
+    expect(ensureWorkspace).not.toHaveBeenCalled();
+    expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
   });
 
   it("creates a fresh local workspace for canonical top-level creation", async () => {

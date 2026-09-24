@@ -95,6 +95,8 @@ import type {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
+import type { DecisionService } from "../../decisions/service.js";
+import { enforceAgentCreateDecision } from "../../decisions/agent-create-gate.js";
 
 export interface PaseoToolHostDependencies {
   agentManager: AgentManager;
@@ -104,6 +106,10 @@ export interface PaseoToolHostDependencies {
   scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
+  decisionService?: Pick<
+    DecisionService,
+    "authorizeAgentCreate" | "consumeAgentCreatePermit"
+  >;
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -1443,7 +1449,14 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         guidance: z.string().optional(),
       },
     },
-    async (args: unknown) => {
+    async (args: unknown, context) => {
+      await enforceAgentCreateDecision({
+        service: options.decisionService,
+        request: z.json().parse(args),
+        ...(callerAgentId ? { callerAgentId } : {}),
+        signal: context.signal ?? new AbortController().signal,
+      });
+
       const resolvedArgs = await resolveCreateAgentToolArgs(args);
       const { parsedArgs, worktree } = resolvedArgs;
       let requestedBackground: boolean;

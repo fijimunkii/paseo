@@ -221,7 +221,6 @@ describe("DecisionService", () => {
       service.consumeAgentCreatePermit(permit, changedOperation),
     ).toThrow("does not match");
 
-    service.consumeAgentCreatePermit(permit, operation);
     expect(() =>
       service.consumeAgentCreatePermit(permit, operation),
     ).toThrow("missing or already consumed");
