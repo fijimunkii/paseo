@@ -13,6 +13,7 @@ import { AgentProfileSchema, AgentSkillSelectionSchema } from "@getpaseo/protoco
 import { PluginIdSchema, PluginSourceSchema } from "@getpaseo/protocol/plugin-config";
 import { TerminalProfileSchema } from "@getpaseo/protocol/terminal-profile";
 import { PaseoServicePortAllocationSchema } from "@getpaseo/protocol/paseo-config-schema";
+import { DecisionConfigSchema } from "@getpaseo/protocol/decision-config";
 
 export const LogLevelSchema = z.enum(["trace", "debug", "info", "warn", "error", "fatal"]);
 export const LogFormatSchema = z.enum(["pretty", "json"]);
@@ -318,6 +319,8 @@ export const PersistedConfigSchema = z
       })
       .strict()
       .optional(),
+    decisions: DecisionConfigSchema.optional(),
+
     features: z
       .object({
         dictation: FeatureDictationSchema.optional(),

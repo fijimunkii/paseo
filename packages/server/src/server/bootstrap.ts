@@ -180,6 +180,7 @@ import type {
   PluginSource,
   TerminalProfile,
 } from "@getpaseo/protocol/messages";
+import type { TypeSafeDecisionConfig } from "@getpaseo/protocol/decision-config";
 import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
@@ -445,6 +446,9 @@ export interface PaseoDaemonConfig {
       model?: string;
       thinkingOptionId?: string;
     }>;
+  };
+  decisions?: {
+    typesafe?: TypeSafeDecisionConfig & { apiKey?: string };
   };
   providerOverrides?: Record<string, ProviderOverride>;
   log?: PersistedConfig["log"];

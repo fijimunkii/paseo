@@ -517,6 +517,24 @@ function resolveBrowserToolsEnabled(persisted: ReturnType<typeof loadPersistedCo
   return persisted.daemon?.browserTools?.enabled ?? false;
 }
 
+function resolveDecisionConfig(
+  env: NodeJS.ProcessEnv,
+  persisted: ReturnType<typeof loadPersistedConfig>,
+): PaseoDaemonConfig["decisions"] {
+  const configured = persisted.decisions?.typesafe;
+  if (!configured) {
+    return undefined;
+  }
+
+  const apiKey = nonEmptyEnv(env.TYPESAFE_API_KEY);
+  return {
+    typesafe: {
+      ...configured,
+      ...(apiKey ? { apiKey } : {}),
+    },
+  };
+}
+
 /**
  * Both profile lists stay `undefined` when absent rather than defaulting to an
  * empty array: for terminal profiles that is what selects the built-in
@@ -649,6 +667,7 @@ export function resolveConfigFromPersisted(
     agentProviderSettings: extractAgentProviderSettings(providerOverrides),
     providerCatalogRefreshTimeoutMs: persisted.agents?.catalogRefreshTimeoutMs,
     metadataGeneration: persisted.agents?.metadataGeneration,
+    decisions: resolveDecisionConfig(env, persisted),
     providerOverrides,
     log: resolveLogConfigFromEnv(env, persisted),
     configReload: {
