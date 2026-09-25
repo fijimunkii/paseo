@@ -1515,10 +1515,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         }),
       };
     } catch (error) {
-      childLogger.error(
-        { err: error, agentId: input.snapshot.id },
-        "Failed to run initial prompt",
-      );
+      childLogger.error({ err: error, agentId: input.snapshot.id }, "Failed to run initial prompt");
       throw error;
     }
   }
