@@ -5,6 +5,7 @@ import type { Logger } from "pino";
 
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import { OrchestrationRoutingModeSchema } from "@getpaseo/protocol/decision-config";
 import type { AgentManager } from "../agent-manager.js";
 import { AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
@@ -98,6 +99,7 @@ import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-confi
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 import type { DecisionService } from "../../decisions/service.js";
 import { enforceAgentCreateDecision } from "../../decisions/agent-create-gate.js";
+import { routeOrchestrationTask } from "../../decisions/orchestration-routing.js";
 
 export interface PaseoToolHostDependencies {
   agentManager: AgentManager;
@@ -107,7 +109,8 @@ export interface PaseoToolHostDependencies {
   scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
-  decisionService?: Pick<DecisionService, "authorizeAgentCreate" | "consumeAgentCreatePermit">;
+  decisionService?: Pick<DecisionService, "authorizeAgentCreate" | "consumeAgentCreatePermit"> &
+    Partial<Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationTask">>;
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -871,6 +874,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     .object({
       modeId: z.string().optional().describe("Session mode to configure before the first run."),
       thinkingOptionId: z.string().optional().describe("Thinking option ID."),
+      orchestration: OrchestrationRoutingModeSchema.optional().describe(
+        "Use manual settings or opt this task into Paseo-managed Jev routing.",
+      ),
       features: z
         .record(z.string(), z.unknown())
         .optional()
@@ -1449,11 +1455,40 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
     async (args: unknown, context) => {
       const parsedDecisionArgs = parseCreateAgentToolArgs(args);
+      const signal = context.signal ?? new AbortController().signal;
+      const requestedProviderModel = resolveRequiredProviderModel(
+        parsedDecisionArgs.parsedArgs.provider,
+      );
+      const routing = await routeOrchestrationTask({
+        service: options.decisionService,
+        providerCatalog: providerSnapshotManager,
+        task: parsedDecisionArgs.parsedArgs.initialPrompt,
+        title: parsedDecisionArgs.parsedArgs.title,
+        requestedProvider: requestedProviderModel.provider,
+        requestedModel: requestedProviderModel.model,
+        requestedThinkingOptionId: parsedDecisionArgs.parsedArgs.settings?.thinkingOptionId,
+        requestedRouting: parsedDecisionArgs.parsedArgs.settings?.orchestration,
+        cwd: callerAgentId ? resolveCallerAgent()?.cwd : process.cwd(),
+        ...(callerAgentId ? { agentId: callerAgentId } : {}),
+        signal,
+      });
+      const effectiveProviderModel = routing.appliedLane
+        ? `${routing.appliedLane.provider}/${routing.appliedLane.model}`
+        : parsedDecisionArgs.parsedArgs.provider;
+      const effectiveThinkingOptionId = routing.appliedLane
+        ? routing.appliedLane.thinkingOptionId
+        : parsedDecisionArgs.parsedArgs.settings?.thinkingOptionId;
+      const decisionRequest = applyCreateAgentRoutingToDecisionRequest(
+        buildCreateAgentDecisionRequest(parsedDecisionArgs),
+        effectiveProviderModel,
+        effectiveThinkingOptionId,
+      );
+
       await enforceAgentCreateDecision({
         service: options.decisionService,
-        request: buildCreateAgentDecisionRequest(parsedDecisionArgs),
+        request: decisionRequest,
         ...(callerAgentId ? { callerAgentId } : {}),
-        signal: context.signal ?? new AbortController().signal,
+        signal,
       });
 
       const resolvedArgs = await resolveCreateAgentToolArgs(parsedDecisionArgs);
@@ -1467,7 +1502,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const selectedProvider = resolveRequiredProviderModel(parsedArgs.provider).provider;
+      const selectedProvider = resolveRequiredProviderModel(effectiveProviderModel).provider;
       const inheritedConfig = resolveInheritedProviderConfig(selectedProvider);
       const {
         snapshot,
@@ -1489,13 +1524,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
         {
           kind: "mcp",
-          provider: parsedArgs.provider,
+          provider: effectiveProviderModel,
           title: parsedArgs.title,
           initialPrompt: parsedArgs.initialPrompt,
           config: inheritedConfig,
           cwd: resolvedArgs.cwd,
           workspaceId: resolvedArgs.workspaceId,
-          thinking: parsedArgs.settings?.thinkingOptionId,
+          thinking: effectiveThinkingOptionId,
           features: parsedArgs.settings?.features,
           labels: parsedArgs.labels,
           mode: parsedArgs.settings?.modeId,
@@ -1651,6 +1686,33 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       notifyOnFinish: input.notifyOnFinish,
       ...(input.parsedArgs.labels ? { labels: input.parsedArgs.labels } : {}),
       ...(input.parsedArgs.settings ? { settings: input.parsedArgs.settings } : {}),
+    });
+  }
+
+  function applyCreateAgentRoutingToDecisionRequest(
+    request: JsonValue,
+    provider: string,
+    thinkingOptionId: string | undefined,
+  ): JsonValue {
+    if (request === null || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error("create_agent decision request must be an object");
+    }
+
+    const existingSettings =
+      request.settings && typeof request.settings === "object" && !Array.isArray(request.settings)
+        ? request.settings
+        : {};
+    const { thinkingOptionId: _ignoredThinkingOptionId, ...settingsWithoutThinking } =
+      existingSettings;
+    const settings = {
+      ...settingsWithoutThinking,
+      ...(thinkingOptionId ? { thinkingOptionId } : {}),
+    };
+
+    return z.json().parse({
+      ...request,
+      provider,
+      ...(Object.keys(settings).length > 0 ? { settings } : { settings: undefined }),
     });
   }
 
