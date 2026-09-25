@@ -27,7 +27,6 @@ describe("buildOrchestrationEvidence", () => {
     const evidence = buildOrchestrationEvidence({
       timeline: [shell("npm test", 0), shell("npm run typecheck", 0), shell("npm run lint", 0)],
       turnStatus: "completed",
-      assistantResult: "Implemented and verified.",
       git: {
         isGit: true,
         isDirty: true,
@@ -81,13 +80,21 @@ describe("buildOrchestrationEvidence", () => {
     expect(new Set(evidence.toolFailureSignatures).size).toBe(2);
   });
 
-  test("bounds assistant output before it becomes external decision state", () => {
+  test("deduplicates, sorts, and bounds changed paths", () => {
+    const changedPaths = [
+      "z.ts",
+      "a.ts",
+      "a.ts",
+      ...Array.from({ length: 120 }, (_, index) => `file-${String(index).padStart(3, "0")}.ts`),
+    ];
     const evidence = buildOrchestrationEvidence({
       timeline: [],
       turnStatus: "completed",
-      assistantResult: "x".repeat(3_000),
+      changedPaths,
     });
 
-    expect(evidence.assistantResult).toHaveLength(2_000);
+    expect(evidence.changedPaths).toHaveLength(100);
+    expect(evidence.changedPaths[0]).toBe("a.ts");
+    expect(new Set(evidence.changedPaths).size).toBe(evidence.changedPaths.length);
   });
 });
