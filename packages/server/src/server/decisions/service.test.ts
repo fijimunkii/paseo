@@ -707,6 +707,56 @@ describe("DecisionService", () => {
     });
   });
 
+  test("records bounded orchestration application metadata beside the semantic sample", async () => {
+    const engine = new FakeEngine(() => taskDecisionResult("medium"));
+    const auditStore = new MemoryAuditStore();
+    const service = new DecisionService({
+      paseoHome: "/tmp/paseo-test",
+      config: orchestrationConfig("enforce"),
+      logger,
+      engine,
+      auditStore,
+      now: () => 1_000,
+    });
+
+    const outcome = await service.assessOrchestrationTask({
+      state: { task: "secret task text that must not enter application metadata" },
+      signal: new AbortController().signal,
+    });
+    if (!outcome) {
+      throw new Error("Expected orchestration outcome");
+    }
+
+    service.recordOrchestrationApplication(outcome.fingerprint, {
+      kind: "task",
+      requested: {
+        provider: "codex",
+        model: "fast",
+        thinkingOptionId: "low",
+      },
+      recommended: "medium",
+      applied: "medium",
+      shadow: false,
+    });
+
+    const record = auditStore.records.get(outcome.fingerprint);
+    expect(record?.orchestrationApplications).toEqual([
+      {
+        kind: "task",
+        createdAt: "1970-01-01T00:00:01.000Z",
+        requested: {
+          provider: "codex",
+          model: "fast",
+          thinkingOptionId: "low",
+        },
+        recommended: "medium",
+        applied: "medium",
+        shadow: false,
+      },
+    ]);
+    expect(JSON.stringify(record?.orchestrationApplications)).not.toContain("secret task text");
+  });
+
   test("applies orchestration routing in enforce mode and reuses the semantic sample", async () => {
     const engine = new FakeEngine(() => taskDecisionResult("high"));
     const auditStore = new MemoryAuditStore();
