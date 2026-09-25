@@ -131,6 +131,7 @@ async function collectTurnEvidence(input: {
     ...(input.result.status === "error" ? { errorKind: "agent_error" } : {}),
     requiresHumanReview: requiresHumanReview(input.result),
     changedPaths: workspace?.changedPaths,
+    workspaceRoot: snapshot?.cwd,
     git: workspace?.git ?? null,
   });
 }
