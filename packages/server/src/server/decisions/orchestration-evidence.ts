@@ -12,6 +12,7 @@ export interface OrchestrationCheckEvidence {
 }
 
 export interface OrchestrationEvidence {
+  requiresHumanReview: boolean;
   turn: {
     status: "completed" | "failed" | "canceled";
     errorKind?: string;
@@ -144,6 +145,7 @@ export function buildOrchestrationEvidence(input: {
   timeline: readonly AgentTimelineItem[];
   turnStatus: "completed" | "failed" | "canceled";
   errorKind?: string;
+  requiresHumanReview?: boolean;
   assistantResult?: string | null;
   git?: {
     isGit: boolean;
@@ -153,6 +155,7 @@ export function buildOrchestrationEvidence(input: {
 }): OrchestrationEvidence {
   const checks = collectChecks(input.timeline);
   return {
+    requiresHumanReview: input.requiresHumanReview ?? false,
     turn: {
       status: input.turnStatus,
       ...(input.errorKind ? { errorKind: input.errorKind } : {}),
