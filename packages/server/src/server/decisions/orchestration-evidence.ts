@@ -83,8 +83,11 @@ function mergeCheckStatus(
 function failureSignature(item: Extract<AgentTimelineItem, { type: "tool_call" }>): string {
   const detailKind = item.detail.type;
   const shellExitCode = item.detail.type === "shell" ? item.detail.exitCode : null;
+  const shellCommand = item.detail.type === "shell" ? item.detail.command.trim() : "";
   return createHash("sha256")
-    .update(`${item.name}\n${detailKind}\n${item.status}\n${shellExitCode ?? "unknown"}`)
+    .update(
+      `${item.name}\n${detailKind}\n${item.status}\n${shellExitCode ?? "unknown"}\n${shellCommand}`,
+    )
     .digest("hex")
     .slice(0, 16);
 }
