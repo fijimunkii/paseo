@@ -64,8 +64,9 @@ export async function routeOrchestrationTask(input: {
   agentId?: string;
   signal: AbortSignal;
 }): Promise<OrchestrationTaskRoutingResult> {
-  const policy = input.service?.getOrchestrationPolicy() ?? null;
-  if (!policy) {
+  const service = input.service ?? null;
+  const policy = service?.getOrchestrationPolicy() ?? null;
+  if (!service || !policy) {
     return {
       routing: "manual",
       outcome: null,
@@ -86,7 +87,7 @@ export async function routeOrchestrationTask(input: {
     };
   }
 
-  const outcome = await input.service!.assessOrchestrationTask({
+  const outcome = await service.assessOrchestrationTask({
     state: {
       task: input.task,
       requestedProvider: input.requestedProvider,
