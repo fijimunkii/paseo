@@ -34,9 +34,8 @@ export interface OrchestrationTaskRoutingResult {
   recommendationError: string | null;
 }
 
-type OrchestrationDecisionService = Pick<
-  DecisionService,
-  "getOrchestrationPolicy" | "assessOrchestrationTask"
+type OrchestrationDecisionService = Partial<
+  Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationTask">
 >;
 
 function laneIdFromOutcome(outcome: DecisionOutcome): OrchestrationLaneId | null {
@@ -65,8 +64,8 @@ export async function routeOrchestrationTask(input: {
   signal: AbortSignal;
 }): Promise<OrchestrationTaskRoutingResult> {
   const service = input.service ?? null;
-  const policy = service?.getOrchestrationPolicy() ?? null;
-  if (!service || !policy) {
+  const policy = service?.getOrchestrationPolicy?.() ?? null;
+  if (!service?.assessOrchestrationTask || !policy) {
     return {
       routing: "manual",
       outcome: null,
