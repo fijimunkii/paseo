@@ -124,7 +124,11 @@ export async function routeManagedAgentTask(input: {
     };
   }
 
-  await ensureAgentLoaded(input.agentManager, input.agentStorage, input.agentId);
+  await ensureAgentLoaded(input.agentId, {
+    agentManager: input.agentManager,
+    agentStorage: input.agentStorage,
+    logger: input.logger,
+  });
   const agent = input.agentManager.getAgent(input.agentId);
   if (!agent) {
     throw new Error(`Agent ${input.agentId} not found`);
