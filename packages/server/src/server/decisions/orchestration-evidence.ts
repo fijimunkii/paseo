@@ -155,20 +155,22 @@ function collectToolFailureSignatures(timeline: readonly AgentTimelineItem[]): s
 }
 
 function boundedChangedPath(filePath: string, workspaceRoot: string | undefined): string {
-  const isAbsolute = path.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
-  if (!isAbsolute) {
+  const pathApi = path.win32.isAbsolute(filePath) ? path.win32 : path;
+  if (!pathApi.isAbsolute(filePath)) {
     return filePath.replaceAll("\\", "/").replace(/^\.\//u, "");
   }
 
-  if (workspaceRoot) {
-    const relative = path.relative(workspaceRoot, filePath);
+  if (workspaceRoot && pathApi.isAbsolute(workspaceRoot)) {
+    const relative = pathApi.relative(workspaceRoot, filePath);
     const outsideWorkspace =
-      relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative);
+      relative === ".." ||
+      relative.startsWith(".." + pathApi.sep) ||
+      pathApi.isAbsolute(relative);
     if (!outsideWorkspace) {
-      return relative.replaceAll(path.sep, "/");
+      return relative.split(pathApi.sep).join("/");
     }
   }
-  return path.basename(filePath);
+  return pathApi.basename(filePath);
 }
 
 export function buildOrchestrationEvidence(input: {
