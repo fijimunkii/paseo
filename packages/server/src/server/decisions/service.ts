@@ -270,7 +270,9 @@ export class DecisionService {
       }
     }
     if (!record) {
-      const error = new Error(`Decision audit record missing for orchestration application ${fingerprint}`);
+      const error = new Error(
+        `Decision audit record missing for orchestration application ${fingerprint}`,
+      );
       if (this.config.mode === "enforce") {
         throw error;
       }
