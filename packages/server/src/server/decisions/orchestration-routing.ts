@@ -1,5 +1,6 @@
 import {
   OrchestrationLaneIdSchema,
+  type OrchestrationDecisionPolicyConfig,
   type OrchestrationLaneId,
   type OrchestrationRoutingMode,
 } from "@getpaseo/protocol/decision-config";
@@ -37,20 +38,12 @@ export interface OrchestrationTaskRoutingResult {
 type OrchestrationDecisionService = Partial<
   Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationTask">
 >;
+type ActiveOrchestrationDecisionService = Pick<
+  DecisionService,
+  "getOrchestrationPolicy" | "assessOrchestrationTask"
+>;
 
-function laneIdFromOutcome(outcome: DecisionOutcome): OrchestrationLaneId | null {
-  if (outcome.wouldDisposition.kind !== "route") {
-    return null;
-  }
-  const parsed = OrchestrationLaneIdSchema.safeParse(outcome.wouldDisposition.target);
-  return parsed.success ? parsed.data : null;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Orchestration lane resolution failed";
-}
-
-export async function routeOrchestrationTask(input: {
+interface OrchestrationTaskRoutingInput {
   service: OrchestrationDecisionService | null | undefined;
   providerCatalog: OrchestrationProviderCatalog;
   task: string;
@@ -62,82 +55,91 @@ export async function routeOrchestrationTask(input: {
   cwd?: string | null;
   agentId?: string;
   signal: AbortSignal;
-}): Promise<OrchestrationTaskRoutingResult> {
-  const service = input.service ?? null;
-  const policy = service?.getOrchestrationPolicy?.() ?? null;
-  if (!service?.assessOrchestrationTask || !policy) {
-    return {
-      routing: "manual",
-      outcome: null,
-      recommendedLane: null,
-      appliedLane: null,
-      recommendationError: null,
-    };
-  }
+}
 
+interface ActiveRouting {
+  service: ActiveOrchestrationDecisionService;
+  policy: OrchestrationDecisionPolicyConfig;
+  routing: "managed";
+}
+
+interface LaneRecommendation {
+  lane: ResolvedOrchestrationLane | null;
+  error: string | null;
+}
+
+function inactiveResult(
+  routing: OrchestrationRoutingMode = "manual",
+): OrchestrationTaskRoutingResult {
+  return {
+    routing,
+    outcome: null,
+    recommendedLane: null,
+    appliedLane: null,
+    recommendationError: null,
+  };
+}
+
+function hasActiveService(
+  service: OrchestrationDecisionService | null | undefined,
+): service is ActiveOrchestrationDecisionService {
+  return (
+    typeof service?.getOrchestrationPolicy === "function" &&
+    typeof service.assessOrchestrationTask === "function"
+  );
+}
+
+function resolveActiveRouting(input: OrchestrationTaskRoutingInput): ActiveRouting | null {
+  if (!hasActiveService(input.service)) {
+    return null;
+  }
+  const policy = input.service.getOrchestrationPolicy();
+  if (!policy) {
+    return null;
+  }
   const routing = input.requestedRouting ?? policy.defaultRouting;
-  if (routing === "manual") {
-    return {
-      routing,
-      outcome: null,
-      recommendedLane: null,
-      appliedLane: null,
-      recommendationError: null,
-    };
+  if (routing !== "managed") {
+    return null;
   }
+  return { service: input.service, policy, routing };
+}
 
-  const outcome = await service.assessOrchestrationTask({
-    state: {
-      task: input.task,
-      requestedProvider: input.requestedProvider,
-      requestedModel: input.requestedModel,
-      requestedThinkingOptionId: input.requestedThinkingOptionId ?? null,
-      ...(input.title ? { title: input.title } : {}),
-    },
-    context: {
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-      tool: "orchestration.task",
-    },
-    signal: input.signal,
-  });
-
-  if (!outcome) {
-    return {
-      routing: "manual",
-      outcome: null,
-      recommendedLane: null,
-      appliedLane: null,
-      recommendationError: null,
-    };
+function laneIdFromDisposition(outcome: DecisionOutcome): OrchestrationLaneId | null {
+  if (outcome.wouldDisposition.kind !== "route") {
+    return null;
   }
+  const parsed = OrchestrationLaneIdSchema.safeParse(outcome.wouldDisposition.target);
+  return parsed.success ? parsed.data : null;
+}
 
-  const laneId = laneIdFromOutcome(outcome);
-  let recommendedLane: ResolvedOrchestrationLane | null = null;
-  let recommendationError: string | null = null;
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Orchestration lane resolution failed";
+}
 
-  if (laneId) {
-    try {
-      recommendedLane = await resolveOrchestrationLane({
-        policy,
-        laneId,
-        providerCatalog: input.providerCatalog,
-        cwd: input.cwd,
-      });
-    } catch (error) {
-      recommendationError = errorMessage(error);
-    }
+async function resolveLaneRecommendation(input: {
+  outcome: DecisionOutcome;
+  policy: OrchestrationDecisionPolicyConfig;
+  providerCatalog: OrchestrationProviderCatalog;
+  cwd?: string | null;
+}): Promise<LaneRecommendation> {
+  const laneId = laneIdFromDisposition(input.outcome);
+  if (!laneId) {
+    return { lane: null, error: null };
   }
-
-  if (outcome.mode === "shadow") {
-    return {
-      routing,
-      outcome,
-      recommendedLane,
-      appliedLane: null,
-      recommendationError,
-    };
+  try {
+    const lane = await resolveOrchestrationLane({
+      policy: input.policy,
+      laneId,
+      providerCatalog: input.providerCatalog,
+      cwd: input.cwd,
+    });
+    return { lane, error: null };
+  } catch (error) {
+    return { lane: null, error: errorMessage(error) };
   }
+}
 
+function requireAppliedLaneId(outcome: DecisionOutcome): OrchestrationLaneId {
   if (outcome.actualDisposition.kind === "review") {
     throw new OrchestrationRoutingError(
       "review_required",
@@ -157,19 +159,29 @@ export async function routeOrchestrationTask(input: {
     );
   }
 
-  const appliedLaneId = OrchestrationLaneIdSchema.safeParse(outcome.actualDisposition.target);
-  if (!appliedLaneId.success) {
+  const laneId = OrchestrationLaneIdSchema.safeParse(outcome.actualDisposition.target);
+  if (!laneId.success) {
     throw new OrchestrationRoutingError(
       "invalid_lane",
       `Unknown orchestration lane '${outcome.actualDisposition.target}'`,
     );
   }
+  return laneId.data;
+}
 
-  let appliedLane: ResolvedOrchestrationLane;
+async function resolveAppliedLane(input: {
+  outcome: DecisionOutcome;
+  policy: OrchestrationDecisionPolicyConfig;
+  providerCatalog: OrchestrationProviderCatalog;
+  requestedProvider: string;
+  cwd?: string | null;
+}): Promise<ResolvedOrchestrationLane> {
+  const laneId = requireAppliedLaneId(input.outcome);
+  let lane: ResolvedOrchestrationLane;
   try {
-    appliedLane = await resolveOrchestrationLane({
-      policy,
-      laneId: appliedLaneId.data,
+    lane = await resolveOrchestrationLane({
+      policy: input.policy,
+      laneId,
       providerCatalog: input.providerCatalog,
       cwd: input.cwd,
     });
@@ -177,15 +189,66 @@ export async function routeOrchestrationTask(input: {
     throw new OrchestrationRoutingError("lane_unavailable", errorMessage(error));
   }
 
-  if (appliedLane.provider !== input.requestedProvider) {
+  if (lane.provider !== input.requestedProvider) {
     throw new OrchestrationRoutingError(
       "provider_mismatch",
-      `Managed routing at this boundary cannot switch provider from '${input.requestedProvider}' to '${appliedLane.provider}'`,
+      `Managed routing at this boundary cannot switch provider from '${input.requestedProvider}' to '${lane.provider}'`,
     );
   }
+  return lane;
+}
 
+export async function routeOrchestrationTask(
+  input: OrchestrationTaskRoutingInput,
+): Promise<OrchestrationTaskRoutingResult> {
+  const active = resolveActiveRouting(input);
+  if (!active) {
+    return inactiveResult(input.requestedRouting ?? "manual");
+  }
+
+  const outcome = await active.service.assessOrchestrationTask({
+    state: {
+      task: input.task,
+      requestedProvider: input.requestedProvider,
+      requestedModel: input.requestedModel,
+      requestedThinkingOptionId: input.requestedThinkingOptionId ?? null,
+      ...(input.title ? { title: input.title } : {}),
+    },
+    context: {
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      tool: "orchestration.task",
+    },
+    signal: input.signal,
+  });
+  if (!outcome) {
+    return inactiveResult();
+  }
+
+  const recommendation = await resolveLaneRecommendation({
+    outcome,
+    policy: active.policy,
+    providerCatalog: input.providerCatalog,
+    cwd: input.cwd,
+  });
+  if (outcome.mode === "shadow") {
+    return {
+      routing: active.routing,
+      outcome,
+      recommendedLane: recommendation.lane,
+      appliedLane: null,
+      recommendationError: recommendation.error,
+    };
+  }
+
+  const appliedLane = await resolveAppliedLane({
+    outcome,
+    policy: active.policy,
+    providerCatalog: input.providerCatalog,
+    requestedProvider: input.requestedProvider,
+    cwd: input.cwd,
+  });
   return {
-    routing,
+    routing: active.routing,
     outcome,
     recommendedLane: appliedLane,
     appliedLane,
