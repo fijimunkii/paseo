@@ -126,15 +126,18 @@ function dispositionLabel(outcome: DecisionOutcome): string {
     : outcome.wouldDisposition.kind;
 }
 
-function recordTaskApplication(input: {
-  service: ActiveOrchestrationDecisionService;
-  outcome: DecisionOutcome;
+export function recordOrchestrationTaskApplication(input: {
+  service: OrchestrationDecisionService | null | undefined;
+  outcome: DecisionOutcome | null;
   requestedProvider: string;
   requestedModel: string;
   requestedThinkingOptionId?: string;
   applied: string | null;
 }): void {
-  input.service.recordOrchestrationApplication?.(input.outcome.fingerprint, {
+  if (!input.outcome) {
+    return;
+  }
+  input.service?.recordOrchestrationApplication?.(input.outcome.fingerprint, {
     kind: "task",
     requested: {
       provider: input.requestedProvider,
@@ -261,14 +264,6 @@ export async function routeOrchestrationTask(
     cwd: input.cwd,
   });
   if (outcome.mode === "shadow") {
-    recordTaskApplication({
-      service: active.service,
-      outcome,
-      requestedProvider: input.requestedProvider,
-      requestedModel: input.requestedModel,
-      requestedThinkingOptionId: input.requestedThinkingOptionId,
-      applied: "manual",
-    });
     return {
       routing: active.routing,
       outcome,
@@ -284,14 +279,6 @@ export async function routeOrchestrationTask(
     providerCatalog: input.providerCatalog,
     requestedProvider: input.requestedProvider,
     cwd: input.cwd,
-  });
-  recordTaskApplication({
-    service: active.service,
-    outcome,
-    requestedProvider: input.requestedProvider,
-    requestedModel: input.requestedModel,
-    requestedThinkingOptionId: input.requestedThinkingOptionId,
-    applied: appliedLane.laneId,
   });
   return {
     routing: active.routing,
