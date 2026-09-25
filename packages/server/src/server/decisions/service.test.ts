@@ -104,6 +104,65 @@ function result(choice: "allow" | "review" | "deny", confidence = 0.99): Decisio
   };
 }
 
+
+function orchestrationConfig(mode: "shadow" | "enforce" = "shadow") {
+  return {
+    mode,
+    typesafe: {
+      enabled: true,
+      baseUrl: "https://api.typesafe.ai",
+      model: mode === "enforce" ? "jev-pinned-test" : "jev-latest",
+      timeoutMs: 10_000,
+      maxConcurrency: 4,
+      apiKey: "secret",
+    },
+    policies: {
+      orchestration: {
+        enabled: true,
+        minimumConfidence: 0.85,
+        failureDisposition: "review",
+        defaultRouting: "managed",
+        maxAttempts: 3,
+        maxEscalations: 1,
+        lanes: {
+          small: { provider: "codex", model: "fast", thinkingOptionId: "low" },
+          medium: { provider: "codex", model: "fast", thinkingOptionId: "medium" },
+          high: { provider: "codex", model: "fast", thinkingOptionId: "high" },
+          escalated: { provider: "codex", model: "strong", thinkingOptionId: "high" },
+        },
+      },
+    },
+  } as const;
+}
+
+function taskDecisionResult(
+  complexity: "small" | "medium" | "high" | "architectural",
+): DecisionResult {
+  return {
+    engine: "typesafe-jev",
+    model: "jev-pinned-test",
+    answers: {
+      complexity: {
+        type: "choice",
+        choice: complexity,
+        confidence: 0.95,
+        probabilities: {
+          small: complexity === "small" ? 0.95 : 0.01,
+          medium: complexity === "medium" ? 0.95 : 0.01,
+          high: complexity === "high" ? 0.95 : 0.01,
+          architectural: complexity === "architectural" ? 0.95 : 0.01,
+        },
+      },
+      requirementsAmbiguous: { type: "noul", probability: 0.05 },
+      needsStrongReasoning: { type: "noul", probability: 0.05 },
+    },
+    usage: {
+      inputTokens: 24,
+      outputTokens: 5,
+    },
+  };
+}
+
 const operation = {
   tool: "create_agent",
   callerAgentId: "agent_parent",
@@ -624,4 +683,66 @@ describe("DecisionService", () => {
     ).resolves.toBeNull();
     expect(engine.calls).toBe(0);
   });
+
+  test("records orchestration routing in shadow mode without applying it", async () => {
+    const engine = new FakeEngine(() => taskDecisionResult("medium"));
+    const service = new DecisionService({
+      paseoHome: "/tmp/paseo-test",
+      config: orchestrationConfig(),
+      logger,
+      engine,
+      auditStore: new MemoryAuditStore(),
+      now: () => 1_000,
+    });
+
+    const outcome = await service.assessOrchestrationTask({
+      state: { task: "Implement a bounded feature" },
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome).toMatchObject({
+      mode: "shadow",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "route", target: "medium" },
+      reused: false,
+    });
+  });
+
+  test("applies orchestration routing in enforce mode and reuses the semantic sample", async () => {
+    const engine = new FakeEngine(() => taskDecisionResult("high"));
+    const auditStore = new MemoryAuditStore();
+    const service = new DecisionService({
+      paseoHome: "/tmp/paseo-test",
+      config: orchestrationConfig("enforce"),
+      logger,
+      engine,
+      auditStore,
+      now: () => 1_000,
+    });
+    const state = { task: "Refactor the execution boundary", changedPaths: ["server.ts"] };
+
+    const first = await service.assessOrchestrationTask({
+      state,
+      signal: new AbortController().signal,
+    });
+    const second = await service.assessOrchestrationTask({
+      state: { changedPaths: ["server.ts"], task: "Refactor the execution boundary" },
+      signal: new AbortController().signal,
+    });
+
+    expect(first).toMatchObject({
+      mode: "enforce",
+      actualDisposition: { kind: "route", target: "high" },
+      wouldDisposition: { kind: "route", target: "high" },
+      reused: false,
+      model: "jev-pinned-test",
+    });
+    expect(second).toMatchObject({
+      actualDisposition: { kind: "route", target: "high" },
+      reused: true,
+    });
+    expect(engine.calls).toBe(1);
+    expect(auditStore.records.size).toBe(1);
+  });
+
 });
