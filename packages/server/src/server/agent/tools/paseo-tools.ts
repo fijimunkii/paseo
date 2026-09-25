@@ -6,7 +6,7 @@ import type { Logger } from "pino";
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { OrchestrationRoutingModeSchema } from "@getpaseo/protocol/decision-config";
-import type { AgentManager } from "../agent-manager.js";
+import type { AgentManager, ManagedAgent } from "../agent-manager.js";
 import { AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
 import {
@@ -1445,6 +1445,84 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  function managedOrchestrationGuidance(
+    managed: Awaited<ReturnType<typeof runManagedAgentLoop>>,
+  ): string | undefined {
+    if (!managed) {
+      return undefined;
+    }
+    if (managed.loop.shadow) {
+      return `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`;
+    }
+    if (managed.loop.directive === "review") {
+      return "Paseo managed orchestration requires human review before continuing.";
+    }
+    return undefined;
+  }
+
+  async function blockingCreateAgentResponse(input: {
+    snapshot: ManagedAgent;
+    createdInBackground: boolean;
+    initialPromptStarted: boolean;
+    routingMode: "manual" | "managed";
+    task: string;
+    signal: AbortSignal;
+  }): Promise<PaseoToolResult | null> {
+    if (input.createdInBackground || !input.initialPromptStarted) {
+      return null;
+    }
+
+    try {
+      let result = await waitForAgentWithTimeout(agentManager, input.snapshot.id, {
+        signal: input.signal,
+        waitForActive: true,
+      });
+      let guidance: string | undefined;
+      if (input.routingMode === "managed") {
+        const managed = await runManagedAgentLoop({
+          decisionService: options.decisionService,
+          agentManager,
+          agentStorage,
+          providerSnapshotManager,
+          workspaceGitService: options.workspaceGitService,
+          logger: childLogger,
+          agentId: input.snapshot.id,
+          task: input.task,
+          initialTimelineStart: 0,
+          initialWaitResult: result,
+          signal: input.signal,
+        });
+        if (managed) {
+          result = managed.waitResult;
+          guidance = managedOrchestrationGuidance(managed);
+        }
+      }
+
+      const liveSnapshot = agentManager.getAgent(input.snapshot.id) ?? input.snapshot;
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: input.snapshot.id,
+          type: input.snapshot.provider,
+          status: result.status,
+          cwd: liveSnapshot.cwd,
+          ...(liveSnapshot.workspaceId ? { workspaceId: liveSnapshot.workspaceId } : {}),
+          currentModeId: liveSnapshot.currentModeId,
+          availableModes: liveSnapshot.availableModes,
+          lastMessage: result.lastMessage,
+          permission: sanitizePermissionRequest(result.permission),
+          ...(guidance ? { guidance } : {}),
+        }),
+      };
+    } catch (error) {
+      childLogger.error(
+        { err: error, agentId: input.snapshot.id },
+        "Failed to run initial prompt",
+      );
+      throw error;
+    }
+  }
+
   registerTool(
     "create_agent",
     {
@@ -1534,61 +1612,16 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
       );
 
-      try {
-        if (!createdInBackground && initialPromptStarted) {
-          let result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
-            signal,
-            waitForActive: true,
-          });
-          let orchestrationGuidance: string | undefined;
-          if (routedCreate.routingMode === "managed") {
-            const managed = await runManagedAgentLoop({
-              decisionService: options.decisionService,
-              agentManager,
-              agentStorage,
-              providerSnapshotManager,
-              workspaceGitService: options.workspaceGitService,
-              logger: childLogger,
-              agentId: snapshot.id,
-              task: parsedArgs.initialPrompt,
-              initialTimelineStart: 0,
-              initialWaitResult: result,
-              signal,
-            });
-            if (managed) {
-              result = managed.waitResult;
-              orchestrationGuidance = managed.loop.shadow
-                ? `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`
-                : managed.loop.directive === "review"
-                  ? "Paseo managed orchestration requires human review before continuing."
-                  : undefined;
-            }
-          }
-
-          const liveSnapshot = agentManager.getAgent(snapshot.id) ?? snapshot;
-          const responseData = {
-            agentId: snapshot.id,
-            type: snapshot.provider,
-            status: result.status,
-            cwd: liveSnapshot.cwd,
-            ...(liveSnapshot.workspaceId ? { workspaceId: liveSnapshot.workspaceId } : {}),
-            currentModeId: liveSnapshot.currentModeId,
-            availableModes: liveSnapshot.availableModes,
-            lastMessage: result.lastMessage,
-            permission: sanitizePermissionRequest(result.permission),
-            ...(orchestrationGuidance ? { guidance: orchestrationGuidance } : {}),
-          };
-          const validJson = ensureValidJson(responseData);
-
-          const response = {
-            content: [],
-            structuredContent: validJson,
-          };
-          return response;
-        }
-      } catch (error) {
-        childLogger.error({ err: error, agentId: snapshot.id }, "Failed to run initial prompt");
-        throw error;
+      const blockingResponse = await blockingCreateAgentResponse({
+        snapshot,
+        createdInBackground,
+        initialPromptStarted,
+        routingMode: routedCreate.routingMode,
+        task: parsedArgs.initialPrompt,
+        signal,
+      });
+      if (blockingResponse) {
+        return blockingResponse;
       }
 
       // Return immediately for async creation.
@@ -2246,11 +2279,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
           });
           if (managed) {
             result = managed.waitResult;
-            orchestrationGuidance = managed.loop.shadow
-              ? `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`
-              : managed.loop.directive === "review"
-                ? "Paseo managed orchestration requires human review before continuing."
-                : undefined;
+            orchestrationGuidance = managedOrchestrationGuidance(managed);
           }
         }
 
