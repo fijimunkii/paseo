@@ -413,6 +413,121 @@
                     }
                   },
                   "additionalProperties": false
+                },
+                "orchestration": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "minimumConfidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "failureDisposition": {
+                      "type": "string",
+                      "enum": ["review", "deny"]
+                    },
+                    "defaultRouting": {
+                      "type": "string",
+                      "enum": ["manual", "managed"]
+                    },
+                    "maxAttempts": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 10
+                    },
+                    "maxEscalations": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 3
+                    },
+                    "lanes": {
+                      "type": "object",
+                      "properties": {
+                        "small": {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "thinkingOptionId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": ["provider", "model"],
+                          "additionalProperties": false
+                        },
+                        "medium": {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "thinkingOptionId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": ["provider", "model"],
+                          "additionalProperties": false
+                        },
+                        "high": {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "thinkingOptionId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": ["provider", "model"],
+                          "additionalProperties": false
+                        },
+                        "escalated": {
+                          "type": "object",
+                          "properties": {
+                            "provider": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "model": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "thinkingOptionId": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": ["provider", "model"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["small", "medium", "high", "escalated"],
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false
