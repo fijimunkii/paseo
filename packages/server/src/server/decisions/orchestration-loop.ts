@@ -77,14 +77,13 @@ function outcomeRecommendation(outcome: DecisionOutcome): string {
 function recordCheckpointApplication(input: {
   service: CheckpointDecisionService;
   outcome: DecisionOutcome;
-  directive: OrchestrationDirective;
   evidence: OrchestrationEvidence;
   state: OrchestrationLoopState;
   applied: string | null;
 }): void {
   input.service.recordOrchestrationApplication?.(input.outcome.fingerprint, {
     kind: "checkpoint",
-    recommended: input.directive,
+    recommended: outcomeRecommendation(input.outcome),
     applied: input.applied,
     shadow: input.outcome.mode === "shadow",
     attempts: input.state.attempts,
@@ -250,7 +249,6 @@ export async function runManagedOrchestrationLoop(input: {
       recordCheckpointApplication({
         service: input.service,
         outcome,
-        directive,
         evidence,
         state,
         applied: null,
@@ -268,7 +266,6 @@ export async function runManagedOrchestrationLoop(input: {
       recordCheckpointApplication({
         service: input.service,
         outcome,
-        directive,
         evidence,
         state,
         applied: directive,
