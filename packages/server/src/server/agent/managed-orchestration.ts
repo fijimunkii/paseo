@@ -104,6 +104,7 @@ export async function routeManagedAgentTask(input: {
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   providerSnapshotManager: ProviderSnapshotManager;
+  logger: Logger;
   agentId: string;
   task: string;
   routing?: OrchestrationRoutingMode;
