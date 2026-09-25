@@ -47,6 +47,7 @@ function checkpointState(task: string, evidence: OrchestrationEvidence): Decisio
       kind: check.kind,
       status: check.status,
     })),
+    changedPaths: [...evidence.changedPaths],
     toolFailureSignatures: [...evidence.toolFailureSignatures],
     git: evidence.git
       ? {
@@ -56,7 +57,6 @@ function checkpointState(task: string, evidence: OrchestrationEvidence): Decisio
           deletions: evidence.git.deletions,
         }
       : null,
-    assistantResult: evidence.assistantResult,
   };
 }
 
