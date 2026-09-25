@@ -203,6 +203,7 @@ function buildAgentManagerSpies() {
       lastMessage: null,
     }),
     setAgentMode: vi.fn().mockResolvedValue(undefined),
+    applyAgentExecutionLane: vi.fn().mockResolvedValue(undefined),
     setAgentModel: vi.fn().mockResolvedValue(undefined),
     setAgentThinkingOption: vi.fn().mockResolvedValue(undefined),
     setAgentFeature: vi.fn().mockResolvedValue(undefined),
@@ -4022,6 +4023,222 @@ describe("send_agent_prompt MCP tool", () => {
       "child-agent",
       expect.objectContaining({ waitForActive: true }),
     );
+  });
+
+  it("keeps Jev shadow orchestration observational for blocking prompts", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({
+      id: "child-agent",
+      provider: "codex",
+      cwd: existingCwd,
+      lifecycle: "idle",
+      currentModeId: null,
+      availableModes: [],
+      config: { title: "Child", model: "gpt-5.4" },
+    } as ManagedAgent);
+
+    const { manager: providerSnapshotManager, stub } = createOpenCodeManager();
+    stub.getProvider.mockResolvedValue({
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      models: [
+        {
+          provider: "codex",
+          id: "gpt-5.4-high",
+          label: "High",
+          thinkingOptions: [{ id: "high", label: "High" }],
+        },
+      ],
+      modes: [],
+    });
+
+    const assessOrchestrationTask = vi.fn().mockResolvedValue({
+      fingerprint: "a".repeat(64),
+      mode: "shadow",
+      model: "jev-latest",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "route", target: "high" },
+      reused: false,
+    });
+    const assessOrchestrationCheckpoint = vi.fn().mockResolvedValue({
+      fingerprint: "b".repeat(64),
+      mode: "shadow",
+      model: "jev-latest",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "route", target: "complete" },
+      reused: false,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager,
+      decisionService: {
+        authorizeAgentCreate: vi.fn(),
+        consumeAgentCreatePermit: vi.fn(),
+        getDecisionMode: () => "shadow",
+        getOrchestrationPolicy: () => ({
+          enabled: true,
+          minimumConfidence: 0.85,
+          failureDisposition: "review",
+          defaultRouting: "managed",
+          maxAttempts: 3,
+          maxEscalations: 1,
+          lanes: {
+            small: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "low" },
+            medium: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "medium" },
+            high: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+            escalated: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+          },
+        }),
+        assessOrchestrationTask,
+        assessOrchestrationCheckpoint,
+      },
+      logger,
+    });
+
+    const response = await invokeToolWithParsedInput(
+      registeredTool(server, "send_agent_prompt"),
+      {
+        agentId: "child-agent",
+        prompt: "Implement the feature",
+        orchestration: "managed",
+        background: false,
+      },
+    );
+
+    expect(assessOrchestrationTask).toHaveBeenCalledOnce();
+    expect(assessOrchestrationCheckpoint).toHaveBeenCalledOnce();
+    expect(spies.agentManager.applyAgentExecutionLane).not.toHaveBeenCalled();
+    expect(spies.agentManager.streamAgent).toHaveBeenCalledOnce();
+    expect(response.structuredContent.guidance).toBe(
+      "Jev shadow checkpoint recommends verify; execution was unchanged.",
+    );
+  });
+
+  it("enforces managed routing and deterministic verification before completion", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({
+      id: "child-agent",
+      provider: "codex",
+      cwd: existingCwd,
+      lifecycle: "idle",
+      currentModeId: null,
+      availableModes: [],
+      config: { title: "Child", model: "gpt-5.4", thinkingOptionId: "low" },
+    } as ManagedAgent);
+    spies.agentManager.waitForAgentEvent
+      .mockResolvedValueOnce({
+        status: "idle",
+        permission: null,
+        lastMessage: "Implementation pass complete.",
+      })
+      .mockResolvedValueOnce({
+        status: "idle",
+        permission: null,
+        lastMessage: "Verification passed.",
+      });
+    const verificationTimeline = [
+      {
+        type: "tool_call",
+        callId: "verify-1",
+        name: "shell",
+        status: "completed",
+        error: null,
+        detail: {
+          type: "shell",
+          command: "npm test",
+          exitCode: 0,
+        },
+      },
+    ];
+    spies.agentManager.getTimeline.mockImplementation(() =>
+      spies.agentManager.streamAgent.mock.calls.length >= 2 ? verificationTimeline : [],
+    );
+
+    const { manager: providerSnapshotManager, stub } = createOpenCodeManager();
+    stub.getProvider.mockResolvedValue({
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      models: [
+        {
+          provider: "codex",
+          id: "gpt-5.4-high",
+          label: "High",
+          thinkingOptions: [{ id: "high", label: "High" }],
+        },
+      ],
+      modes: [],
+    });
+
+    const assessOrchestrationCheckpoint = vi.fn().mockResolvedValue({
+      fingerprint: "d".repeat(64),
+      mode: "enforce",
+      model: "jev-pinned-test",
+      actualDisposition: { kind: "route", target: "complete" },
+      wouldDisposition: { kind: "route", target: "complete" },
+      reused: false,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager,
+      decisionService: {
+        authorizeAgentCreate: vi.fn(),
+        consumeAgentCreatePermit: vi.fn(),
+        getDecisionMode: () => "enforce",
+        getOrchestrationPolicy: () => ({
+          enabled: true,
+          minimumConfidence: 0.85,
+          failureDisposition: "review",
+          defaultRouting: "managed",
+          maxAttempts: 3,
+          maxEscalations: 1,
+          lanes: {
+            small: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "low" },
+            medium: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "medium" },
+            high: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+            escalated: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+          },
+        }),
+        assessOrchestrationTask: vi.fn().mockResolvedValue({
+          fingerprint: "c".repeat(64),
+          mode: "enforce",
+          model: "jev-pinned-test",
+          actualDisposition: { kind: "route", target: "high" },
+          wouldDisposition: { kind: "route", target: "high" },
+          reused: false,
+        }),
+        assessOrchestrationCheckpoint,
+      },
+      logger,
+    });
+
+    const response = await invokeToolWithParsedInput(
+      registeredTool(server, "send_agent_prompt"),
+      {
+        agentId: "child-agent",
+        prompt: "Implement the feature",
+        orchestration: "managed",
+        background: false,
+      },
+    );
+
+    expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledTimes(1);
+    expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledWith(
+      "child-agent",
+      expect.objectContaining({
+        laneId: "high",
+        provider: "codex",
+        model: "gpt-5.4-high",
+        thinkingOptionId: "high",
+      }),
+    );
+    expect(spies.agentManager.streamAgent).toHaveBeenCalledTimes(2);
+    expect(assessOrchestrationCheckpoint).toHaveBeenCalledOnce();
+    expect(response.structuredContent.lastMessage).toBe("Verification passed.");
+    expect(response.structuredContent.guidance).toBeUndefined();
   });
 
   it("does not arm a finish notification for blocking agent-scoped prompts", async () => {
