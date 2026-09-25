@@ -204,7 +204,8 @@ export async function routeManagedAgentTask(input: {
     requestedModel,
     requestedThinkingOptionId:
       agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
-    applied: routing.mode === "shadow" ? "manual" : (routing.appliedLane?.laneId ?? null),
+    applied:
+      routing.outcome?.mode === "shadow" ? "manual" : (routing.appliedLane?.laneId ?? null),
   });
   return routing;
 }
