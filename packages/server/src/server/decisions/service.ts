@@ -325,7 +325,6 @@ export class DecisionService {
   private async evaluate(input: {
     definition: DecisionDefinition;
     policy: RuntimeDecisionPolicy;
-    operation: JsonValue;
     state: DecisionEntry;
     context?: DecisionContext;
     signal: AbortSignal;
