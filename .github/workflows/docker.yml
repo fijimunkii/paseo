@@ -35,16 +35,20 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   PLATFORMS: linux/amd64,linux/arm64
+  AX_PLATFORMS: linux/amd64
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.values.outputs.image }}
+      ax_image: ${{ steps.values.outputs.ax_image }}
       install_version: ${{ steps.values.outputs.install_version }}
       publish: ${{ steps.values.outputs.publish }}
       check_tag: ${{ steps.values.outputs.check_tag }}
+      ax_check_tag: ${{ steps.values.outputs.ax_check_tag }}
       publish_tags: ${{ steps.values.outputs.publish_tags }}
+      ax_publish_tags: ${{ steps.values.outputs.ax_publish_tags }}
     steps:
       - uses: actions/checkout@v6
 
@@ -60,6 +64,7 @@ jobs:
 
           owner="$(printf '%s' "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/paseo"
+          ax_image="ghcr.io/fijimunkii/paseo-ax"
           package_version="$(node -p "require('./package.json').version")"
           install_version="${INPUT_PASEO_VERSION:-${package_version}}"
           publish=false
@@ -93,22 +98,30 @@ jobs:
           fi
 
           check_tag="${image}:check-${GITHUB_SHA::12}"
+          ax_check_tag="${ax_image}:check-${GITHUB_SHA::12}"
           publish_tags="${image}:${install_version}"
+          ax_publish_tags="${ax_image}:${install_version}"
           if [[ "${publish_latest}" == "true" ]]; then
             publish_tags="${publish_tags}"$'\n'"${image}:latest"
+            ax_publish_tags="${ax_publish_tags}"$'\n'"${ax_image}:latest"
           fi
 
           {
             echo "image=${image}"
+            echo "ax_image=${ax_image}"
             echo "install_version=${install_version}"
             echo "publish=${publish}"
             echo "check_tag=${check_tag}"
+            echo "ax_check_tag=${ax_check_tag}"
             echo "publish_tags<<EOF"
             echo "${publish_tags}"
             echo "EOF"
+            echo "ax_publish_tags<<EOF"
+            echo "${ax_publish_tags}"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Resolved image=${image} install_version=${install_version} publish=${publish}"
+          echo "Resolved image=${image} ax_image=${ax_image} install_version=${install_version} publish=${publish}"
 
   build:
     needs: setup
@@ -122,7 +135,8 @@ jobs:
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/build-push-action@v7
+      - name: Build Paseo image
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/base/Dockerfile
@@ -134,6 +148,33 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=paseo
           cache-to: type=gha,scope=paseo,mode=max
+
+      - name: Validate AX wrapper scripts
+        run: |
+          bash -n docker/ax/rootfs/usr/local/bin/ax-task-runner
+          bash -n docker/ax/rootfs/usr/local/bin/paseo-ax-daemon
+          bash -n docker/ax/smoke-test.sh
+          node --check docker/ax/rootfs/usr/local/bin/paseo-ax-runner-proxy.mjs
+
+      - name: Build Paseo AX image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/ax/Dockerfile
+          platforms: ${{ env.AX_PLATFORMS }}
+          build-args: |
+            PASEO_VERSION=${{ needs.setup.outputs.install_version }}
+          tags: ${{ needs.setup.outputs.ax_check_tag }}
+          push: false
+          load: true
+          provenance: false
+          cache-from: type=gha,scope=paseo-ax
+          cache-to: type=gha,scope=paseo-ax,mode=max
+
+      - name: Smoke test Paseo AX runner
+        env:
+          AX_IMAGE: ${{ needs.setup.outputs.ax_check_tag }}
+        run: bash docker/ax/smoke-test.sh
 
   publish:
     needs: setup
@@ -155,7 +196,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v7
+      - name: Publish Paseo image
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/base/Dockerfile
@@ -167,3 +209,17 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=paseo
           cache-to: type=gha,scope=paseo,mode=max
+
+      - name: Publish Paseo AX image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/ax/Dockerfile
+          platforms: ${{ env.AX_PLATFORMS }}
+          build-args: |
+            PASEO_VERSION=${{ needs.setup.outputs.install_version }}
+          tags: ${{ needs.setup.outputs.ax_publish_tags }}
+          push: true
+          provenance: false
+          cache-from: type=gha,scope=paseo-ax
+          cache-to: type=gha,scope=paseo-ax,mode=max
