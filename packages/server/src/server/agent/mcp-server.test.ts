@@ -203,6 +203,7 @@ function buildAgentManagerSpies() {
       lastMessage: null,
     }),
     setAgentMode: vi.fn().mockResolvedValue(undefined),
+    applyAgentExecutionLane: vi.fn().mockResolvedValue(undefined),
     setAgentModel: vi.fn().mockResolvedValue(undefined),
     setAgentThinkingOption: vi.fn().mockResolvedValue(undefined),
     setAgentFeature: vi.fn().mockResolvedValue(undefined),
@@ -1010,6 +1011,25 @@ describe("browser MCP tools", () => {
     expect(lookupTool(server, "browser_snapshot")).toBeDefined();
   });
 
+  it("applies static create-agent policy before the decision gate", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const authorizeAgentCreate = vi.fn();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      paseoToolPolicy: { disabledTools: ["create_agent"] },
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    expect(lookupTool(server, "create_agent")).toBeUndefined();
+    expect(authorizeAgentCreate).not.toHaveBeenCalled();
+  });
+
   it("filters policy-disabled tools from MCP listing and calls", async () => {
     const agentManager = new BoundaryAgentManagerFake();
     const agentStorage = new BoundaryAgentStorageFake();
@@ -1280,6 +1300,248 @@ describe("create_agent MCP tool", () => {
         (issue: { path: Array<string | number> }) => issue.path[0] === "initialPrompt",
       ),
     ).toBe(true);
+  });
+
+  it("rejects passthrough create_agent fields before the decision engine is called", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const ensureWorkspace = vi.fn(async () => "workspace-should-not-exist");
+    const authorizeAgentCreate = vi.fn();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: ensureWorkspace,
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "create_agent").handler({
+        title: "Unknown field",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Do work",
+        background: true,
+        arbitraryFingerprintSalt: "retry-me",
+      }),
+    ).rejects.toThrow();
+
+    expect(authorizeAgentCreate).not.toHaveBeenCalled();
+    expect(ensureWorkspace).not.toHaveBeenCalled();
+    expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("normalizes equivalent canonical and legacy create_agent syntax to one decision operation", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const authorizeAgentCreate = vi.fn().mockResolvedValue({
+      fingerprint: "e".repeat(64),
+      mode: "enforce",
+      actualDisposition: { kind: "deny" },
+      wouldDisposition: { kind: "deny" },
+      reused: false,
+      permit: null,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: vi.fn(async () => "workspace-should-not-exist"),
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+    const tool = registeredTool(server, "create_agent");
+    const common = {
+      title: "Equivalent request",
+      provider: "codex/gpt-5.4",
+      initialPrompt: "Do work",
+    };
+
+    await expect(tool.handler(common)).rejects.toThrow("Decision policy denied create_agent");
+    await expect(
+      tool.handler({
+        ...common,
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("Decision policy denied create_agent");
+
+    expect(authorizeAgentCreate).toHaveBeenCalledTimes(2);
+    const firstOperation = authorizeAgentCreate.mock.calls[0]?.[0]?.operation;
+    const secondOperation = authorizeAgentCreate.mock.calls[1]?.[0]?.operation;
+    expect(secondOperation).toEqual(firstOperation);
+  });
+
+  it("blocks create_agent before workspace or agent side effects when decision policy denies", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const ensureWorkspace = vi.fn(async () => "workspace-should-not-exist");
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: ensureWorkspace,
+      decisionService: {
+        authorizeAgentCreate: vi.fn().mockResolvedValue({
+          fingerprint: "d".repeat(64),
+          mode: "enforce",
+          actualDisposition: { kind: "deny" },
+          wouldDisposition: { kind: "deny" },
+          reused: false,
+          permit: null,
+        }),
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "create_agent").handler({
+        title: "Blocked agent",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Do work",
+        background: true,
+      }),
+    ).rejects.toThrow("Decision policy denied create_agent");
+
+    expect(ensureWorkspace).not.toHaveBeenCalled();
+    expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("routes managed create_agent before authorization and execution", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.createAgent.mockResolvedValue({
+      id: "routed-agent",
+      provider: "codex",
+      cwd: existingCwd,
+      workspaceId: "workspace-created",
+      lifecycle: "idle",
+      currentModeId: null,
+      availableModes: [],
+      config: {
+        provider: "codex",
+        cwd: existingCwd,
+        model: "gpt-5.4-high",
+        thinkingOptionId: "high",
+      },
+    } as ManagedAgent);
+
+    const { manager: providerSnapshotManager, stub } = createOpenCodeManager();
+    stub.getProvider.mockResolvedValue({
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      models: [
+        {
+          provider: "codex",
+          id: "gpt-5.4",
+          label: "Fast",
+          thinkingOptions: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+        },
+        {
+          provider: "codex",
+          id: "gpt-5.4-high",
+          label: "High",
+          thinkingOptions: [{ id: "high", label: "High" }],
+        },
+      ],
+      modes: [],
+    });
+
+    const authorizeAgentCreate = vi.fn().mockResolvedValue({
+      fingerprint: "a".repeat(64),
+      mode: "enforce",
+      model: "jev-pinned-test",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "allow" },
+      reused: false,
+      permit: {
+        id: "permit-1",
+        decisionFingerprint: "a".repeat(64),
+        operationFingerprint: "b".repeat(64),
+        model: "jev-pinned-test",
+        disposition: "allow",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      },
+    });
+    const consumeAgentCreatePermit = vi.fn();
+    const assessOrchestrationTask = vi.fn().mockResolvedValue({
+      fingerprint: "c".repeat(64),
+      mode: "enforce",
+      model: "jev-pinned-test",
+      actualDisposition: { kind: "route", target: "high" },
+      wouldDisposition: { kind: "route", target: "high" },
+      reused: false,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager,
+      ensureWorkspaceForCreate,
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit,
+        getOrchestrationPolicy: () => ({
+          enabled: true,
+          minimumConfidence: 0.85,
+          failureDisposition: "review",
+          defaultRouting: "manual",
+          maxAttempts: 3,
+          maxEscalations: 1,
+          lanes: {
+            small: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "low" },
+            medium: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "medium" },
+            high: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+            escalated: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+          },
+        }),
+        assessOrchestrationTask,
+      },
+      logger,
+    });
+
+    await registeredTool(server, "create_agent").handler({
+      title: "Routed agent",
+      provider: "codex/gpt-5.4",
+      initialPrompt: "Implement the bounded feature",
+      background: true,
+      settings: {
+        orchestration: "managed",
+        thinkingOptionId: "low",
+      },
+    });
+
+    expect(assessOrchestrationTask).toHaveBeenCalledOnce();
+    expect(authorizeAgentCreate).toHaveBeenCalledOnce();
+    const authorized = authorizeAgentCreate.mock.calls[0]?.[0];
+    expect(authorized?.operation).toMatchObject({
+      request: {
+        provider: "codex/gpt-5.4-high",
+        settings: {
+          orchestration: "managed",
+          thinkingOptionId: "high",
+        },
+      },
+    });
+    expect(consumeAgentCreatePermit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "permit-1" }),
+      authorized?.operation,
+    );
+    expect(spies.agentManager.createAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        model: "gpt-5.4-high",
+        thinkingOptionId: "high",
+      }),
+      undefined,
+      { workspaceId: "workspace-created" },
+    );
   });
 
   it("creates a fresh local workspace for canonical top-level creation", async () => {
@@ -3761,6 +4023,216 @@ describe("send_agent_prompt MCP tool", () => {
       "child-agent",
       expect.objectContaining({ waitForActive: true }),
     );
+  });
+
+  it("keeps Jev shadow orchestration observational for blocking prompts", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({
+      id: "child-agent",
+      provider: "codex",
+      cwd: existingCwd,
+      lifecycle: "idle",
+      currentModeId: null,
+      availableModes: [],
+      config: { title: "Child", model: "gpt-5.4" },
+    } as ManagedAgent);
+
+    const { manager: providerSnapshotManager, stub } = createOpenCodeManager();
+    stub.getProvider.mockResolvedValue({
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      models: [
+        {
+          provider: "codex",
+          id: "gpt-5.4-high",
+          label: "High",
+          thinkingOptions: [{ id: "high", label: "High" }],
+        },
+      ],
+      modes: [],
+    });
+
+    const assessOrchestrationTask = vi.fn().mockResolvedValue({
+      fingerprint: "a".repeat(64),
+      mode: "shadow",
+      model: "jev-latest",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "route", target: "high" },
+      reused: false,
+    });
+    const assessOrchestrationCheckpoint = vi.fn().mockResolvedValue({
+      fingerprint: "b".repeat(64),
+      mode: "shadow",
+      model: "jev-latest",
+      actualDisposition: { kind: "allow" },
+      wouldDisposition: { kind: "route", target: "complete" },
+      reused: false,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager,
+      decisionService: {
+        authorizeAgentCreate: vi.fn(),
+        consumeAgentCreatePermit: vi.fn(),
+        getDecisionMode: () => "shadow",
+        getOrchestrationPolicy: () => ({
+          enabled: true,
+          minimumConfidence: 0.85,
+          failureDisposition: "review",
+          defaultRouting: "managed",
+          maxAttempts: 3,
+          maxEscalations: 1,
+          lanes: {
+            small: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "low" },
+            medium: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "medium" },
+            high: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+            escalated: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+          },
+        }),
+        assessOrchestrationTask,
+        assessOrchestrationCheckpoint,
+      },
+      logger,
+    });
+
+    const response = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+      agentId: "child-agent",
+      prompt: "Implement the feature",
+      orchestration: "managed",
+      background: false,
+    });
+
+    expect(assessOrchestrationTask).toHaveBeenCalledOnce();
+    expect(assessOrchestrationCheckpoint).toHaveBeenCalledOnce();
+    expect(spies.agentManager.applyAgentExecutionLane).not.toHaveBeenCalled();
+    expect(spies.agentManager.streamAgent).toHaveBeenCalledOnce();
+    expect(response.structuredContent.guidance).toBe(
+      "Jev shadow checkpoint recommends verify; execution was unchanged.",
+    );
+  });
+
+  it("enforces managed routing and deterministic verification before completion", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    spies.agentManager.getAgent.mockReturnValue({
+      id: "child-agent",
+      provider: "codex",
+      cwd: existingCwd,
+      lifecycle: "idle",
+      currentModeId: null,
+      availableModes: [],
+      config: { title: "Child", model: "gpt-5.4", thinkingOptionId: "low" },
+    } as ManagedAgent);
+    spies.agentManager.waitForAgentEvent
+      .mockResolvedValueOnce({
+        status: "idle",
+        permission: null,
+        lastMessage: "Implementation pass complete.",
+      })
+      .mockResolvedValueOnce({
+        status: "idle",
+        permission: null,
+        lastMessage: "Verification passed.",
+      });
+    const verificationTimeline = [
+      {
+        type: "tool_call",
+        callId: "verify-1",
+        name: "shell",
+        status: "completed",
+        error: null,
+        detail: {
+          type: "shell",
+          command: "npm test",
+          exitCode: 0,
+        },
+      },
+    ];
+    spies.agentManager.getTimeline.mockImplementation(() =>
+      spies.agentManager.streamAgent.mock.calls.length >= 2 ? verificationTimeline : [],
+    );
+
+    const { manager: providerSnapshotManager, stub } = createOpenCodeManager();
+    stub.getProvider.mockResolvedValue({
+      provider: "codex",
+      status: "ready",
+      enabled: true,
+      models: [
+        {
+          provider: "codex",
+          id: "gpt-5.4-high",
+          label: "High",
+          thinkingOptions: [{ id: "high", label: "High" }],
+        },
+      ],
+      modes: [],
+    });
+
+    const assessOrchestrationCheckpoint = vi.fn().mockResolvedValue({
+      fingerprint: "d".repeat(64),
+      mode: "enforce",
+      model: "jev-pinned-test",
+      actualDisposition: { kind: "route", target: "complete" },
+      wouldDisposition: { kind: "route", target: "complete" },
+      reused: false,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager,
+      decisionService: {
+        authorizeAgentCreate: vi.fn(),
+        consumeAgentCreatePermit: vi.fn(),
+        getDecisionMode: () => "enforce",
+        getOrchestrationPolicy: () => ({
+          enabled: true,
+          minimumConfidence: 0.85,
+          failureDisposition: "review",
+          defaultRouting: "managed",
+          maxAttempts: 3,
+          maxEscalations: 1,
+          lanes: {
+            small: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "low" },
+            medium: { provider: "codex", model: "gpt-5.4", thinkingOptionId: "medium" },
+            high: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+            escalated: { provider: "codex", model: "gpt-5.4-high", thinkingOptionId: "high" },
+          },
+        }),
+        assessOrchestrationTask: vi.fn().mockResolvedValue({
+          fingerprint: "c".repeat(64),
+          mode: "enforce",
+          model: "jev-pinned-test",
+          actualDisposition: { kind: "route", target: "high" },
+          wouldDisposition: { kind: "route", target: "high" },
+          reused: false,
+        }),
+        assessOrchestrationCheckpoint,
+      },
+      logger,
+    });
+
+    const response = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+      agentId: "child-agent",
+      prompt: "Implement the feature",
+      orchestration: "managed",
+      background: false,
+    });
+
+    expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledTimes(1);
+    expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledWith(
+      "child-agent",
+      expect.objectContaining({
+        laneId: "high",
+        provider: "codex",
+        model: "gpt-5.4-high",
+        thinkingOptionId: "high",
+      }),
+    );
+    expect(spies.agentManager.streamAgent).toHaveBeenCalledTimes(2);
+    expect(assessOrchestrationCheckpoint).toHaveBeenCalledOnce();
+    expect(response.structuredContent.lastMessage).toBe("Verification passed.");
+    expect(response.structuredContent.guidance).toBeUndefined();
   });
 
   it("does not arm a finish notification for blocking agent-scoped prompts", async () => {

@@ -1929,6 +1929,49 @@ export class AgentManager {
     return notice;
   }
 
+  async applyAgentExecutionLane(
+    agentId: string,
+    lane: { provider: string; model: string; thinkingOptionId?: string },
+  ): Promise<void> {
+    const agent = this.requireSessionAgent(agentId);
+    if (agent.provider !== lane.provider) {
+      throw new Error(
+        `Cannot apply execution lane for provider '${lane.provider}' to agent provider '${agent.provider}'`,
+      );
+    }
+    if (!agent.session.setModel) {
+      throw new Error(`Provider '${agent.provider}' does not support runtime model changes`);
+    }
+    if (lane.thinkingOptionId && !agent.session.setThinkingOption) {
+      throw new Error(`Provider '${agent.provider}' does not support runtime thinking changes`);
+    }
+
+    const previousModel = agent.runtimeInfo?.model ?? agent.config.model ?? null;
+    const previousThinkingOptionId =
+      agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null;
+
+    await this.setAgentModel(agentId, lane.model);
+    if (!lane.thinkingOptionId) {
+      return;
+    }
+
+    try {
+      await this.setAgentThinkingOption(agentId, lane.thinkingOptionId);
+    } catch (error) {
+      try {
+        await this.setAgentModel(agentId, previousModel);
+        await this.setAgentThinkingOption(agentId, previousThinkingOptionId);
+      } catch (rollbackError) {
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to apply execution lane and restore the previous runtime configuration after: ${originalMessage}`,
+          { cause: rollbackError },
+        );
+      }
+      throw error;
+    }
+  }
+
   async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
     const agent = this.requireSessionAgent(agentId);
     const normalizedModelId =

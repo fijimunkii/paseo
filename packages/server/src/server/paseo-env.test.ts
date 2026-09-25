@@ -20,6 +20,7 @@ describe("paseo env contract", () => {
     [PASEO_NODE_ENV]: "production",
     PASEO_SUPERVISED: "1",
     ESBUILD_BINARY_PATH: "/Applications/Paseo.app/Contents/Resources/app.asar.unpacked/esbuild",
+    TYPESAFE_API_KEY: "daemon-only-secret",
   };
   const runtimeControlEnvKeys = [
     "ELECTRON_RUN_AS_NODE",
@@ -28,6 +29,7 @@ describe("paseo env contract", () => {
     "PASEO_SUPERVISED",
     "ELECTRON_NO_ATTACH_CONSOLE",
     "ESBUILD_BINARY_PATH",
+    "TYPESAFE_API_KEY",
   ] as const;
 
   test("builds internal daemon child env by preserving pass-through and control vars", () => {
@@ -91,12 +93,14 @@ describe("paseo env contract", () => {
   test("builds self node command with Electron node mode", () => {
     const command = buildSelfNodeCommand(["script.js"], {
       CUSTOM: "value",
+      TYPESAFE_API_KEY: "must-not-propagate",
     });
 
     expect(command.command).toBe(process.execPath);
     expect(command.args).toEqual(["script.js"]);
     expect(command.env[ELECTRON_RUN_AS_NODE]).toBe("1");
     expect(command.env.CUSTOM).toBe("value");
+    expect(command.env.TYPESAFE_API_KEY).toBeUndefined();
     expect(command.env.ELECTRON_NO_ATTACH_CONSOLE).toBeUndefined();
     expect(command.env.PASEO_DESKTOP_MANAGED).toBeUndefined();
     expect(command.env[PASEO_NODE_ENV]).toBeUndefined();

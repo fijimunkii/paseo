@@ -2,7 +2,7 @@
 
 Paseo follows a client-server architecture, similar to Docker. The daemon runs on your machine and manages your coding agents. Clients (the mobile app, CLI, or web interface) connect to the daemon to monitor and control those agents.
 
-Your code never leaves your machine. Paseo is a local-first tool that connects directly to your development environment.
+Paseo is local-first and keeps code and workspace data on the daemon host by default. Features with an external data path require explicit configuration; the TypeSafe decision-engine integration is one such opt-in exception.
 
 ## Architecture
 
@@ -79,6 +79,16 @@ One gap remains on web and desktop: a sandboxed document may navigate _itself_, 
 Native builds narrow this gap rather than closing it outright. The WebView refuses every navigation after the initial document, but that decision is made in the app's JavaScript, and on Android the WebView falls back to allowing a navigation when the decision doesn't come back in time. Treat it as a strong mitigation, not a guarantee: if the JS thread is stalled at the moment a page navigates, the same leak is possible there too.
 
 If you don't trust a page, read it in `Source`, which executes nothing. Source is available as an editable view on supported web hosts and a read-only view everywhere else.
+
+## External decision engines
+
+TypeSafe Jev is disabled unless decision configuration explicitly enables both TypeSafe and a policy. `TYPESAFE_API_KEY` alone does not activate network access. Paseo strips that key from normal external child-process environments. When enabled, Paseo sends only the policy's code-owned state projection to TypeSafe; it does not send arbitrary workspace contents or MCP passthrough fields.
+
+Decision output is not an authorization primitive by itself. Static Paseo restrictions run first, policy mapping runs in daemon code, and daemon-owned side effects require an allow disposition plus a short-lived permit bound to the exact operation. Enforce-mode failures resolve only to review or deny. Decision audit files omit the raw state and operation payload.
+
+The Jev gate is a harness boundary, not a process sandbox. It governs the Paseo operations explicitly wired to it; an unrestricted coding agent still executes as the daemon user and remains subject to the ordinary local-daemon trust model.
+
+See [docs/decisions.md](docs/decisions.md) for the complete data-flow and audit contract.
 
 ## Agent authentication
 

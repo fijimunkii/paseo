@@ -517,6 +517,41 @@ function resolveBrowserToolsEnabled(persisted: ReturnType<typeof loadPersistedCo
   return persisted.daemon?.browserTools?.enabled ?? false;
 }
 
+function resolveDecisionConfig(
+  env: NodeJS.ProcessEnv,
+  persisted: ReturnType<typeof loadPersistedConfig>,
+): PaseoDaemonConfig["decisions"] {
+  const configured = persisted.decisions;
+  if (!configured) {
+    return undefined;
+  }
+
+  const typesafe = configured.typesafe;
+  const createAgentToolEnabled = configured.policies.createAgentTool?.enabled === true;
+  const orchestrationEnabled = configured.policies.orchestration?.enabled === true;
+  if (
+    configured.mode === "enforce" &&
+    (createAgentToolEnabled || orchestrationEnabled) &&
+    typesafe?.enabled === true &&
+    typesafe.model === "jev-latest"
+  ) {
+    throw new Error("Enforced decisions require a pinned TypeSafe model instead of jev-latest");
+  }
+
+  const apiKey = nonEmptyEnv(env.TYPESAFE_API_KEY);
+  return {
+    ...configured,
+    ...(typesafe
+      ? {
+          typesafe: {
+            ...typesafe,
+            ...(apiKey ? { apiKey } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 /**
  * Both profile lists stay `undefined` when absent rather than defaulting to an
  * empty array: for terminal profiles that is what selects the built-in
@@ -649,6 +684,7 @@ export function resolveConfigFromPersisted(
     agentProviderSettings: extractAgentProviderSettings(providerOverrides),
     providerCatalogRefreshTimeoutMs: persisted.agents?.catalogRefreshTimeoutMs,
     metadataGeneration: persisted.agents?.metadataGeneration,
+    decisions: resolveDecisionConfig(env, persisted),
     providerOverrides,
     log: resolveLogConfigFromEnv(env, persisted),
     configReload: {

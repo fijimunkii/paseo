@@ -2,7 +2,7 @@
 
 Paseo is a client-server system for monitoring and controlling local AI coding agents. The daemon runs on your machine, manages agent processes, and streams their output in real time over WebSocket. Clients (mobile app, CLI, desktop app) connect to the daemon to observe and interact with agents.
 
-Your code never leaves your machine. Paseo is local-first.
+Paseo is local-first. Code and workspace data stay on the daemon host unless you explicitly enable a feature with an external data path, such as a hosted decision engine. See [Decision engines](decisions.md).
 
 ## System overview
 
@@ -85,6 +85,7 @@ not retain non-Git directories.
 | `server/agent/tools/`           | Transport-neutral catalog for workspaces, agents, permissions, and automation  |
 | `server/agent/mcp-server.ts`    | Thin MCP adapter that registers the Paseo tool catalog with the MCP SDK        |
 | `server/agent/providers/`       | Provider adapters (see "Agent providers" below)                                |
+| `server/decisions/`             | Decision engines, policy mapping, audit records, and operation permits         |
 | `server/orchestration-skills/`  | Bundled catalog, host selection, convergence, and skill-directory transactions |
 | `server/relay-transport.ts`     | Outbound relay connection with E2E encryption                                  |
 | `server/schedule/`              | Cron-based scheduled agents                                                    |

@@ -4,7 +4,9 @@ import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
-import type { AgentManager } from "../agent-manager.js";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
+import { OrchestrationRoutingModeSchema } from "@getpaseo/protocol/decision-config";
+import type { AgentManager, ManagedAgent } from "../agent-manager.js";
 import { AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
 import {
@@ -62,6 +64,7 @@ import {
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
 import { sendPromptToAgent, setupFinishNotification } from "../agent-prompt.js";
+import { routeManagedAgentTask, runManagedAgentLoop } from "../managed-orchestration.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -95,6 +98,12 @@ import type {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
+import type { DecisionService } from "../../decisions/service.js";
+import { enforceAgentCreateDecision } from "../../decisions/agent-create-gate.js";
+import {
+  recordOrchestrationTaskApplication,
+  routeOrchestrationTask,
+} from "../../decisions/orchestration-routing.js";
 
 export interface PaseoToolHostDependencies {
   agentManager: AgentManager;
@@ -104,6 +113,17 @@ export interface PaseoToolHostDependencies {
   scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
+  decisionService?: Pick<DecisionService, "authorizeAgentCreate" | "consumeAgentCreatePermit"> &
+    Partial<
+      Pick<
+        DecisionService,
+        | "getDecisionMode"
+        | "getOrchestrationPolicy"
+        | "assessOrchestrationTask"
+        | "assessOrchestrationCheckpoint"
+        | "recordOrchestrationApplication"
+      >
+    >;
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -867,6 +887,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     .object({
       modeId: z.string().optional().describe("Session mode to configure before the first run."),
       thinkingOptionId: z.string().optional().describe("Thinking option ID."),
+      orchestration: OrchestrationRoutingModeSchema.optional().describe(
+        "Use manual settings or opt this task into Paseo-managed Jev routing.",
+      ),
       features: z
         .record(z.string(), z.unknown())
         .optional()
@@ -1122,6 +1145,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     agentId: z.string(),
     prompt: z.string(),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
+    orchestration: OrchestrationRoutingModeSchema.optional().describe(
+      "Use manual settings or opt this task into Paseo-managed Jev orchestration.",
+    ),
   };
   const agentToAgentSendAgentPromptInputSchema = {
     ...commonSendAgentPromptInputSchema,
@@ -1423,6 +1449,81 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  function managedOrchestrationGuidance(
+    managed: Awaited<ReturnType<typeof runManagedAgentLoop>>,
+  ): string | undefined {
+    if (!managed) {
+      return undefined;
+    }
+    if (managed.loop.shadow) {
+      return `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`;
+    }
+    if (managed.loop.directive === "review") {
+      return "Paseo managed orchestration requires human review before continuing.";
+    }
+    return undefined;
+  }
+
+  async function blockingCreateAgentResponse(input: {
+    snapshot: ManagedAgent;
+    createdInBackground: boolean;
+    initialPromptStarted: boolean;
+    routingMode: "manual" | "managed";
+    task: string;
+    signal: AbortSignal;
+  }): Promise<PaseoToolResult | null> {
+    if (input.createdInBackground || !input.initialPromptStarted) {
+      return null;
+    }
+
+    try {
+      let result = await waitForAgentWithTimeout(agentManager, input.snapshot.id, {
+        signal: input.signal,
+        waitForActive: true,
+      });
+      let guidance: string | undefined;
+      if (input.routingMode === "managed") {
+        const managed = await runManagedAgentLoop({
+          decisionService: options.decisionService,
+          agentManager,
+          agentStorage,
+          providerSnapshotManager,
+          workspaceGitService: options.workspaceGitService,
+          logger: childLogger,
+          agentId: input.snapshot.id,
+          task: input.task,
+          initialTimelineStart: 0,
+          initialWaitResult: result,
+          signal: input.signal,
+        });
+        if (managed) {
+          result = managed.waitResult;
+          guidance = managedOrchestrationGuidance(managed);
+        }
+      }
+
+      const liveSnapshot = agentManager.getAgent(input.snapshot.id) ?? input.snapshot;
+      return {
+        content: [],
+        structuredContent: ensureValidJson({
+          agentId: input.snapshot.id,
+          type: input.snapshot.provider,
+          status: result.status,
+          cwd: liveSnapshot.cwd,
+          ...(liveSnapshot.workspaceId ? { workspaceId: liveSnapshot.workspaceId } : {}),
+          currentModeId: liveSnapshot.currentModeId,
+          availableModes: liveSnapshot.availableModes,
+          lastMessage: result.lastMessage,
+          permission: sanitizePermissionRequest(result.permission),
+          ...(guidance ? { guidance } : {}),
+        }),
+      };
+    } catch (error) {
+      childLogger.error({ err: error, agentId: input.snapshot.id }, "Failed to run initial prompt");
+      throw error;
+    }
+  }
+
   registerTool(
     "create_agent",
     {
@@ -1443,8 +1544,24 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         guidance: z.string().optional(),
       },
     },
-    async (args: unknown) => {
-      const resolvedArgs = await resolveCreateAgentToolArgs(args);
+    async (args: unknown, context) => {
+      const parsedDecisionArgs = parseCreateAgentToolArgs(args);
+      const signal = context.signal ?? new AbortController().signal;
+      const routedCreate = await resolveCreateAgentRouting(parsedDecisionArgs, signal);
+      const {
+        providerModel: effectiveProviderModel,
+        thinkingOptionId: effectiveThinkingOptionId,
+        decisionRequest,
+      } = routedCreate;
+
+      await enforceAgentCreateDecision({
+        service: options.decisionService,
+        request: decisionRequest,
+        ...(callerAgentId ? { callerAgentId } : {}),
+        signal,
+      });
+
+      const resolvedArgs = await resolveCreateAgentToolArgs(parsedDecisionArgs);
       const { parsedArgs, worktree } = resolvedArgs;
       let requestedBackground: boolean;
       let notifyOnFinish: boolean;
@@ -1455,7 +1572,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         requestedBackground = resolvedArgs.parsedArgs.background;
         notifyOnFinish = resolvedArgs.parsedArgs.notifyOnFinish ?? false;
       }
-      const selectedProvider = resolveRequiredProviderModel(parsedArgs.provider).provider;
+      const selectedProvider = resolveRequiredProviderModel(effectiveProviderModel).provider;
       const inheritedConfig = resolveInheritedProviderConfig(selectedProvider);
       const {
         snapshot,
@@ -1477,13 +1594,13 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
         {
           kind: "mcp",
-          provider: parsedArgs.provider,
+          provider: effectiveProviderModel,
           title: parsedArgs.title,
           initialPrompt: parsedArgs.initialPrompt,
           config: inheritedConfig,
           cwd: resolvedArgs.cwd,
           workspaceId: resolvedArgs.workspaceId,
-          thinking: parsedArgs.settings?.thinkingOptionId,
+          thinking: effectiveThinkingOptionId,
           features: parsedArgs.settings?.features,
           labels: parsedArgs.labels,
           mode: parsedArgs.settings?.modeId,
@@ -1496,35 +1613,28 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
       );
 
-      try {
-        if (!createdInBackground && initialPromptStarted) {
-          const result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
-            waitForActive: true,
-          });
+      recordOrchestrationTaskApplication({
+        service: options.decisionService,
+        outcome: routedCreate.routing.outcome,
+        requestedProvider: routedCreate.requestedProvider,
+        requestedModel: routedCreate.requestedModel,
+        requestedThinkingOptionId: routedCreate.requestedThinkingOptionId,
+        applied:
+          routedCreate.routing.outcome?.mode === "shadow"
+            ? "manual"
+            : (routedCreate.routing.appliedLane?.laneId ?? null),
+      });
 
-          const liveSnapshot = agentManager.getAgent(snapshot.id) ?? snapshot;
-          const responseData = {
-            agentId: snapshot.id,
-            type: snapshot.provider,
-            status: result.status,
-            cwd: liveSnapshot.cwd,
-            ...(liveSnapshot.workspaceId ? { workspaceId: liveSnapshot.workspaceId } : {}),
-            currentModeId: liveSnapshot.currentModeId,
-            availableModes: liveSnapshot.availableModes,
-            lastMessage: result.lastMessage,
-            permission: sanitizePermissionRequest(result.permission),
-          };
-          const validJson = ensureValidJson(responseData);
-
-          const response = {
-            content: [],
-            structuredContent: validJson,
-          };
-          return response;
-        }
-      } catch (error) {
-        childLogger.error({ err: error, agentId: snapshot.id }, "Failed to run initial prompt");
-        throw error;
+      const blockingResponse = await blockingCreateAgentResponse({
+        snapshot,
+        createdInBackground,
+        initialPromptStarted,
+        routingMode: routedCreate.routingMode,
+        task: parsedArgs.initialPrompt,
+        signal,
+      });
+      if (blockingResponse) {
+        return blockingResponse;
       }
 
       // Return immediately for async creation.
@@ -1552,6 +1662,231 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  type ParsedCreateAgentToolArgs =
+    | {
+        kind: "agent-scoped";
+        syntax: "canonical";
+        parsedArgs: AgentToAgentCreateAgentArgs;
+      }
+    | {
+        kind: "agent-scoped";
+        syntax: "legacy";
+        parsedArgs: LegacyAgentToAgentCreateAgentArgs;
+      }
+    | {
+        kind: "top-level";
+        syntax: "canonical";
+        parsedArgs: TopLevelCreateAgentArgs;
+      }
+    | {
+        kind: "top-level";
+        syntax: "legacy";
+        parsedArgs: LegacyTopLevelCreateAgentArgs;
+      };
+
+  function parseCreateAgentToolArgs(args: unknown): ParsedCreateAgentToolArgs {
+    if (callerAgentId) {
+      if (hasLegacyCreateAgentPlacement(args)) {
+        // COMPAT(nestedCreateAgentPlacement): accept the old relationship/workspace shape without
+        // advertising it to models. Added in v0.2.0; remove after 2027-01-17.
+        return {
+          kind: "agent-scoped",
+          syntax: "legacy",
+          parsedArgs: legacyAgentToAgentCreateAgentArgsSchema.parse(args),
+        };
+      }
+      return {
+        kind: "agent-scoped",
+        syntax: "canonical",
+        parsedArgs: agentToAgentCreateAgentArgsSchema.parse(args),
+      };
+    }
+
+    if (hasLegacyCreateAgentPlacement(args)) {
+      // COMPAT(nestedCreateAgentPlacement): see the agent-scoped branch above.
+      const parsedArgs = normalizeTopLevelCreateAgentArgs(
+        legacyTopLevelCreateAgentArgsSchema.parse(args),
+      );
+      if (parsedArgs.relationship?.kind === "subagent") {
+        throw new Error("relationship subagent requires an agent-scoped tool session");
+      }
+      if (!parsedArgs.workspace) {
+        throw new Error("Legacy create_agent placement could not be resolved");
+      }
+      return {
+        kind: "top-level",
+        syntax: "legacy",
+        parsedArgs,
+      };
+    }
+
+    return {
+      kind: "top-level",
+      syntax: "canonical",
+      parsedArgs: canonicalTopLevelCreateAgentArgsSchema.parse(args),
+    };
+  }
+
+  type CommonParsedCreateAgentArgs = Pick<
+    AgentToAgentCreateAgentArgs,
+    "title" | "provider" | "initialPrompt" | "labels" | "settings"
+  >;
+
+  function finalizeCreateAgentDecisionRequest(input: {
+    parsedArgs: CommonParsedCreateAgentArgs;
+    relationship: JsonValue;
+    workspace: JsonValue;
+    background: boolean;
+    notifyOnFinish: boolean;
+  }): JsonValue {
+    return z.json().parse({
+      title: input.parsedArgs.title,
+      provider: input.parsedArgs.provider,
+      initialPrompt: input.parsedArgs.initialPrompt,
+      relationship: input.relationship,
+      workspace: input.workspace,
+      background: input.background,
+      notifyOnFinish: input.notifyOnFinish,
+      ...(input.parsedArgs.labels ? { labels: input.parsedArgs.labels } : {}),
+      ...(input.parsedArgs.settings ? { settings: input.parsedArgs.settings } : {}),
+    });
+  }
+
+  async function resolveCreateAgentRouting(
+    input: ParsedCreateAgentToolArgs,
+    signal: AbortSignal,
+  ): Promise<{
+    routingMode: "manual" | "managed";
+    routing: Awaited<ReturnType<typeof routeOrchestrationTask>>;
+    requestedProvider: string;
+    requestedModel: string;
+    requestedThinkingOptionId: string | undefined;
+    providerModel: string;
+    thinkingOptionId: string | undefined;
+    decisionRequest: JsonValue;
+  }> {
+    const requested = resolveRequiredProviderModel(input.parsedArgs.provider);
+    const requestedModel = z.string().min(1).parse(requested.model);
+    const routing = await routeOrchestrationTask({
+      service: options.decisionService,
+      providerCatalog: providerSnapshotManager,
+      task: input.parsedArgs.initialPrompt,
+      title: input.parsedArgs.title,
+      requestedProvider: requested.provider,
+      requestedModel,
+      requestedThinkingOptionId: input.parsedArgs.settings?.thinkingOptionId,
+      requestedRouting: input.parsedArgs.settings?.orchestration,
+      cwd: callerAgentId ? resolveCallerAgent()?.cwd : process.cwd(),
+      ...(callerAgentId ? { agentId: callerAgentId } : {}),
+      signal,
+    });
+    const providerModel = routing.appliedLane
+      ? `${routing.appliedLane.provider}/${routing.appliedLane.model}`
+      : input.parsedArgs.provider;
+    const thinkingOptionId = routing.appliedLane
+      ? routing.appliedLane.thinkingOptionId
+      : input.parsedArgs.settings?.thinkingOptionId;
+    return {
+      routingMode: routing.routing,
+      routing,
+      requestedProvider: requested.provider,
+      requestedModel,
+      requestedThinkingOptionId: input.parsedArgs.settings?.thinkingOptionId,
+      providerModel,
+      thinkingOptionId,
+      decisionRequest: applyCreateAgentRoutingToDecisionRequest(
+        buildCreateAgentDecisionRequest(input),
+        providerModel,
+        thinkingOptionId,
+      ),
+    };
+  }
+
+  function applyCreateAgentRoutingToDecisionRequest(
+    request: JsonValue,
+    provider: string,
+    thinkingOptionId: string | undefined,
+  ): JsonValue {
+    if (request === null || typeof request !== "object" || Array.isArray(request)) {
+      throw new Error("create_agent decision request must be an object");
+    }
+
+    const existingSettings =
+      request.settings && typeof request.settings === "object" && !Array.isArray(request.settings)
+        ? request.settings
+        : {};
+    const settings: Record<string, JsonValue> = { ...existingSettings };
+    delete settings.thinkingOptionId;
+    if (thinkingOptionId) {
+      settings.thinkingOptionId = thinkingOptionId;
+    }
+
+    const requestWithoutSettings = { ...request };
+    delete requestWithoutSettings.settings;
+    return z.json().parse({
+      ...requestWithoutSettings,
+      provider,
+      ...(Object.keys(settings).length > 0 ? { settings } : {}),
+    });
+  }
+
+  function buildCreateAgentDecisionRequest(input: ParsedCreateAgentToolArgs): JsonValue {
+    if (input.kind === "agent-scoped" && input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: parsedArgs.relationship,
+        workspace: parsedArgs.workspace,
+        background: true,
+        notifyOnFinish: parsedArgs.notifyOnFinish,
+      });
+    }
+
+    if (input.kind === "agent-scoped") {
+      const parsedArgs = input.parsedArgs;
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: { kind: "subagent" },
+        workspace: parsedArgs.workspaceId
+          ? { kind: "existing", workspaceId: parsedArgs.workspaceId }
+          : { kind: "current" },
+        background: true,
+        notifyOnFinish: parsedArgs.notifyOnFinish,
+      });
+    }
+
+    if (input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
+      if (!parsedArgs.workspace) {
+        throw new Error("Legacy create_agent placement could not be resolved");
+      }
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: parsedArgs.relationship ?? { kind: "detached" },
+        workspace: parsedArgs.workspace,
+        background: parsedArgs.background,
+        notifyOnFinish: parsedArgs.notifyOnFinish ?? false,
+      });
+    }
+
+    const parsedArgs = input.parsedArgs;
+    return finalizeCreateAgentDecisionRequest({
+      parsedArgs,
+      relationship: { kind: "detached" },
+      workspace: parsedArgs.workspaceId
+        ? { kind: "existing", workspaceId: parsedArgs.workspaceId }
+        : {
+            kind: "create",
+            source: {
+              kind: "directory",
+              path: process.cwd(),
+            },
+          },
+      background: parsedArgs.background,
+      notifyOnFinish: parsedArgs.notifyOnFinish ?? false,
+    });
+  }
+
   type ResolvedCreateAgentToolArgs =
     | {
         kind: "agent-scoped";
@@ -1570,25 +1905,26 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: CreateAgentFromMcpInput["worktree"];
       };
 
-  async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
-    if (callerAgentId) {
-      if (hasLegacyCreateAgentPlacement(args)) {
-        // COMPAT(nestedCreateAgentPlacement): accept the old relationship/workspace shape without
-        // advertising it to models. Added in v0.2.0; remove after 2027-01-17.
-        const parsed = legacyAgentToAgentCreateAgentArgsSchema.parse(args);
-        const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(parsed.workspace, {
-          prompt: parsed.initialPrompt,
-        });
-        return {
-          kind: "agent-scoped",
-          parsedArgs: parsed,
-          detached: parsed.relationship.kind === "detached",
-          cwd,
-          workspaceId,
-          worktree,
-        };
-      }
-      const parsed = agentToAgentCreateAgentArgsSchema.parse(args);
+  async function resolveCreateAgentToolArgs(
+    input: ParsedCreateAgentToolArgs,
+  ): Promise<ResolvedCreateAgentToolArgs> {
+    if (input.kind === "agent-scoped" && input.syntax === "legacy") {
+      const parsed = input.parsedArgs;
+      const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(parsed.workspace, {
+        prompt: parsed.initialPrompt,
+      });
+      return {
+        kind: "agent-scoped",
+        parsedArgs: parsed,
+        detached: parsed.relationship.kind === "detached",
+        cwd,
+        workspaceId,
+        worktree,
+      };
+    }
+
+    if (input.kind === "agent-scoped") {
+      const parsed = input.parsedArgs;
       const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(parsed.workspaceId, {
         prompt: parsed.initialPrompt,
       });
@@ -1601,14 +1937,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: undefined,
       };
     }
-    if (hasLegacyCreateAgentPlacement(args)) {
-      // COMPAT(nestedCreateAgentPlacement): see the agent-scoped branch above.
-      const parsedArgs = normalizeTopLevelCreateAgentArgs(
-        legacyTopLevelCreateAgentArgsSchema.parse(args),
-      );
-      if (parsedArgs.relationship?.kind === "subagent") {
-        throw new Error("relationship subagent requires an agent-scoped tool session");
-      }
+
+    if (input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
       if (!parsedArgs.workspace) {
         throw new Error("Legacy create_agent placement could not be resolved");
       }
@@ -1625,7 +1956,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree,
       };
     }
-    const parsedArgs = canonicalTopLevelCreateAgentArgsSchema.parse(args);
+
+    const parsedArgs = input.parsedArgs;
     const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(
       parsedArgs.workspaceId,
       { prompt: parsedArgs.initialPrompt },
@@ -1900,14 +2232,31 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         guidance: z.string().optional(),
       },
     },
-    async ({
-      agentId,
-      prompt,
-      sessionMode,
-      background = Boolean(callerAgentId),
-      notifyOnFinish = Boolean(callerAgentId),
-    }) => {
+    async (
+      {
+        agentId,
+        prompt,
+        sessionMode,
+        orchestration,
+        background = Boolean(callerAgentId),
+        notifyOnFinish = Boolean(callerAgentId),
+      },
+      context,
+    ) => {
       const shouldNotifyOnFinish = Boolean(callerAgentId && notifyOnFinish && background);
+      const signal = context.signal ?? new AbortController().signal;
+      const routing = await routeManagedAgentTask({
+        decisionService: options.decisionService,
+        agentManager,
+        agentStorage,
+        providerSnapshotManager,
+        logger: childLogger,
+        agentId,
+        task: prompt,
+        routing: orchestration,
+        signal,
+      });
+      const timelineStart = agentManager.getTimeline(agentId).length;
 
       await sendPromptToAgent({
         agentManager,
@@ -1930,15 +2279,37 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
       // If not running in background, wait for completion
       if (!background) {
-        const result = await waitForAgentWithTimeout(agentManager, agentId, {
+        let result = await waitForAgentWithTimeout(agentManager, agentId, {
+          signal,
           waitForActive: true,
         });
+        let orchestrationGuidance: string | undefined;
+        if (routing.routing === "managed") {
+          const managed = await runManagedAgentLoop({
+            decisionService: options.decisionService,
+            agentManager,
+            agentStorage,
+            providerSnapshotManager,
+            workspaceGitService: options.workspaceGitService,
+            logger: childLogger,
+            agentId,
+            task: prompt,
+            initialTimelineStart: timelineStart,
+            initialWaitResult: result,
+            signal,
+          });
+          if (managed) {
+            result = managed.waitResult;
+            orchestrationGuidance = managedOrchestrationGuidance(managed);
+          }
+        }
 
         const responseData = {
           success: true,
           status: result.status,
           lastMessage: result.lastMessage,
           permission: sanitizePermissionRequest(result.permission),
+          ...(orchestrationGuidance ? { guidance: orchestrationGuidance } : {}),
         };
         const validJson = ensureValidJson(responseData);
 

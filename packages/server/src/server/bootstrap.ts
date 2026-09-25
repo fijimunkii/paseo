@@ -180,6 +180,7 @@ import type {
   PluginSource,
   TerminalProfile,
 } from "@getpaseo/protocol/messages";
+import type { DecisionConfig, TypeSafeDecisionConfig } from "@getpaseo/protocol/decision-config";
 import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
@@ -231,6 +232,7 @@ import {
 import { DaemonExecutions } from "./hub/daemon-executions.js";
 import { PluginService } from "./plugins/index.js";
 import { ManagedPluginSources } from "./plugins/managed-source.js";
+import { createDecisionService } from "./decisions/service.js";
 
 const MCP_DEBUG_BATCH_LIMIT = 10;
 const MCP_DEBUG_SECRET = "[redacted]";
@@ -446,6 +448,9 @@ export interface PaseoDaemonConfig {
       thinkingOptionId?: string;
     }>;
   };
+  decisions?: Omit<DecisionConfig, "typesafe"> & {
+    typesafe?: TypeSafeDecisionConfig & { apiKey?: string };
+  };
   providerOverrides?: Record<string, ProviderOverride>;
   log?: PersistedConfig["log"];
   onLifecycleIntent?: (intent: DaemonLifecycleIntent) => void;
@@ -608,6 +613,11 @@ export async function createPaseoDaemon(
   });
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
+  const decisionService = createDecisionService({
+    paseoHome: config.paseoHome,
+    config: config.decisions,
+    logger: logger.child({ module: "decisions" }),
+  });
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
     managedSources: new ManagedPluginSources(config.paseoHome),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
@@ -1372,6 +1382,7 @@ export async function createPaseoDaemon(
     scheduleService,
     providerSnapshotManager,
     daemonConfigStore,
+    decisionService: decisionService ?? undefined,
     github,
     workspaceGitService,
     findWorkspaceIdForCwd: findWorkspaceIdForCwdExternal,
