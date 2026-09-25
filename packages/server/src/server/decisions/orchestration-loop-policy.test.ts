@@ -25,6 +25,7 @@ function evidence(
   turnStatus: OrchestrationEvidence["turn"]["status"] = "completed",
 ): OrchestrationEvidence {
   return {
+    requiresHumanReview: false,
     turn: { status: turnStatus },
     verificationStatus,
     checks: [],
