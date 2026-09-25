@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   CreateAgentToolDecisionPolicyConfigSchema,
   DecisionConfigSchema,
+  OrchestrationDecisionPolicyConfigSchema,
   TypeSafeDecisionConfigSchema,
 } from "./decision-config.js";
 
@@ -26,6 +27,44 @@ describe("decision config", () => {
       enabled: false,
       minimumConfidence: 0.9,
       failureDisposition: "review",
+    });
+  });
+
+  test("defaults orchestration to disabled manual routing", () => {
+    expect(OrchestrationDecisionPolicyConfigSchema.parse({})).toEqual({
+      enabled: false,
+      minimumConfidence: 0.85,
+      failureDisposition: "review",
+      defaultRouting: "manual",
+      maxAttempts: 3,
+      maxEscalations: 1,
+    });
+  });
+
+  test("requires complete execution lanes when orchestration is enabled", () => {
+    expect(
+      OrchestrationDecisionPolicyConfigSchema.safeParse({
+        enabled: true,
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OrchestrationDecisionPolicyConfigSchema.parse({
+        enabled: true,
+        lanes: {
+          small: { provider: "codex", model: "fast", thinkingOptionId: "low" },
+          medium: { provider: "codex", model: "fast", thinkingOptionId: "medium" },
+          high: { provider: "codex", model: "fast", thinkingOptionId: "high" },
+          escalated: { provider: "codex", model: "strong", thinkingOptionId: "high" },
+        },
+      }),
+    ).toMatchObject({
+      enabled: true,
+      defaultRouting: "manual",
+      lanes: {
+        small: { provider: "codex", model: "fast", thinkingOptionId: "low" },
+        escalated: { provider: "codex", model: "strong", thinkingOptionId: "high" },
+      },
     });
   });
 
