@@ -1946,9 +1946,28 @@ export class AgentManager {
       throw new Error(`Provider '${agent.provider}' does not support runtime thinking changes`);
     }
 
+    const previousModel = agent.runtimeInfo?.model ?? agent.config.model ?? null;
+    const previousThinkingOptionId =
+      agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null;
+
     await this.setAgentModel(agentId, lane.model);
-    if (lane.thinkingOptionId) {
+    if (!lane.thinkingOptionId) {
+      return;
+    }
+
+    try {
       await this.setAgentThinkingOption(agentId, lane.thinkingOptionId);
+    } catch (error) {
+      try {
+        await this.setAgentModel(agentId, previousModel);
+        await this.setAgentThinkingOption(agentId, previousThinkingOptionId);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Failed to apply execution lane and restore the previous runtime configuration",
+        );
+      }
+      throw error;
     }
   }
 
