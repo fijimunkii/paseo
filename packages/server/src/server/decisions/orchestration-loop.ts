@@ -36,6 +36,7 @@ export interface ManagedOrchestrationCallbacks {
 function checkpointState(task: string, evidence: OrchestrationEvidence): DecisionEntry {
   return {
     task,
+    requiresHumanReview: evidence.requiresHumanReview,
     turn: {
       status: evidence.turn.status,
       ...(evidence.turn.errorKind ? { errorKind: evidence.turn.errorKind } : {}),
