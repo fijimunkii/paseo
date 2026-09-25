@@ -1965,7 +1965,7 @@ export class AgentManager {
         throw new AggregateError(
           [error, rollbackError],
           "Failed to apply execution lane and restore the previous runtime configuration",
-          { cause: error },
+          { cause: rollbackError },
         );
       }
       throw error;
