@@ -106,7 +106,7 @@ export async function routeManagedAgentTask(input: {
   providerSnapshotManager: ProviderSnapshotManager;
   agentId: string;
   task: string;
-  routing: OrchestrationRoutingMode;
+  routing?: OrchestrationRoutingMode;
   signal: AbortSignal;
 }): Promise<OrchestrationTaskRoutingResult> {
   await ensureAgentLoaded(input.agentManager, input.agentStorage, input.agentId);
@@ -121,8 +121,10 @@ export async function routeManagedAgentTask(input: {
     (await input.providerSnapshotManager.resolveDefaultModel({
       provider: agent.provider,
       cwd: agent.cwd,
-    })) ??
-    "unknown";
+    }));
+  if (!requestedModel) {
+    throw new Error(`Cannot determine the current model for managed agent ${input.agentId}`);
+  }
 
   const routing = await routeOrchestrationTask({
     service: input.decisionService,
