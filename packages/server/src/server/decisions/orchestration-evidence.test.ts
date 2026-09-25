@@ -95,6 +95,47 @@ describe("buildOrchestrationEvidence", () => {
     expect(new Set(evidence.toolFailureSignatures).size).toBe(2);
   });
 
+  test("normalizes absolute changed paths before external decision state", () => {
+    const posix = buildOrchestrationEvidence({
+      timeline: [
+        {
+          type: "tool_call",
+          callId: "write-posix",
+          name: "write",
+          status: "completed",
+          error: null,
+          detail: {
+            type: "write",
+            filePath: "/Users/alice/repo/src/app.ts",
+          },
+        },
+      ],
+      turnStatus: "completed",
+      workspaceRoot: "/Users/alice/repo",
+      changedPaths: ["/Users/alice/private/secret.txt"],
+    });
+    expect(posix.changedPaths).toEqual(["secret.txt", "src/app.ts"]);
+
+    const windows = buildOrchestrationEvidence({
+      timeline: [
+        {
+          type: "tool_call",
+          callId: "write-windows",
+          name: "write",
+          status: "completed",
+          error: null,
+          detail: {
+            type: "write",
+            filePath: "C:\\repo\\src\\app.ts",
+          },
+        },
+      ],
+      turnStatus: "completed",
+      workspaceRoot: "C:\\repo",
+    });
+    expect(windows.changedPaths).toEqual(["src/app.ts"]);
+  });
+
   test("deduplicates, sorts, and bounds changed paths", () => {
     const changedPaths = [
       "z.ts",
