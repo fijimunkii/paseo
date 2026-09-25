@@ -29,14 +29,12 @@ export interface OrchestrationEvidence {
   } | null;
 }
 
-const MAX_ASSISTANT_RESULT_CHARS = 2_000;
-
 function classifyVerificationCommand(command: string): OrchestrationCheckKind | null {
   if (/[\r\n]/u.test(command)) {
     return null;
   }
   const normalized = command.trim().replace(/\s+/gu, " ").toLowerCase();
-  if (!normalized || /(?:&&|\|\||[;|<>\`]|\$\()/u.test(normalized)) {
+  if (!normalized || /[;&|<>`]|\$\(/u.test(normalized)) {
     return null;
   }
 
