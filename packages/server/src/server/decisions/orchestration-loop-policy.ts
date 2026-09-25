@@ -56,6 +56,9 @@ export function resolveOrchestrationDirective(input: {
   outcome: DecisionOutcome | null;
   state: OrchestrationLoopState;
 }): OrchestrationDirective {
+  if (input.evidence.requiresHumanReview) {
+    return "review";
+  }
   if (
     input.evidence.turn.status !== "completed" ||
     input.evidence.verificationStatus === "failed"
