@@ -1456,33 +1456,12 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     async (args: unknown, context) => {
       const parsedDecisionArgs = parseCreateAgentToolArgs(args);
       const signal = context.signal ?? new AbortController().signal;
-      const requestedProviderModel = resolveRequiredProviderModel(
-        parsedDecisionArgs.parsedArgs.provider,
-      );
-      const routing = await routeOrchestrationTask({
-        service: options.decisionService,
-        providerCatalog: providerSnapshotManager,
-        task: parsedDecisionArgs.parsedArgs.initialPrompt,
-        title: parsedDecisionArgs.parsedArgs.title,
-        requestedProvider: requestedProviderModel.provider,
-        requestedModel: requestedProviderModel.model,
-        requestedThinkingOptionId: parsedDecisionArgs.parsedArgs.settings?.thinkingOptionId,
-        requestedRouting: parsedDecisionArgs.parsedArgs.settings?.orchestration,
-        cwd: callerAgentId ? resolveCallerAgent()?.cwd : process.cwd(),
-        ...(callerAgentId ? { agentId: callerAgentId } : {}),
-        signal,
-      });
-      const effectiveProviderModel = routing.appliedLane
-        ? `${routing.appliedLane.provider}/${routing.appliedLane.model}`
-        : parsedDecisionArgs.parsedArgs.provider;
-      const effectiveThinkingOptionId = routing.appliedLane
-        ? routing.appliedLane.thinkingOptionId
-        : parsedDecisionArgs.parsedArgs.settings?.thinkingOptionId;
-      const decisionRequest = applyCreateAgentRoutingToDecisionRequest(
-        buildCreateAgentDecisionRequest(parsedDecisionArgs),
-        effectiveProviderModel,
-        effectiveThinkingOptionId,
-      );
+      const routedCreate = await resolveCreateAgentRouting(parsedDecisionArgs, signal);
+      const {
+        providerModel: effectiveProviderModel,
+        thinkingOptionId: effectiveThinkingOptionId,
+        decisionRequest,
+      } = routedCreate;
 
       await enforceAgentCreateDecision({
         service: options.decisionService,
@@ -1687,6 +1666,46 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       ...(input.parsedArgs.labels ? { labels: input.parsedArgs.labels } : {}),
       ...(input.parsedArgs.settings ? { settings: input.parsedArgs.settings } : {}),
     });
+  }
+
+  async function resolveCreateAgentRouting(
+    input: ParsedCreateAgentToolArgs,
+    signal: AbortSignal,
+  ): Promise<{
+    providerModel: string;
+    thinkingOptionId: string | undefined;
+    decisionRequest: JsonValue;
+  }> {
+    const requested = resolveRequiredProviderModel(input.parsedArgs.provider);
+    const requestedModel = z.string().min(1).parse(requested.model);
+    const routing = await routeOrchestrationTask({
+      service: options.decisionService,
+      providerCatalog: providerSnapshotManager,
+      task: input.parsedArgs.initialPrompt,
+      title: input.parsedArgs.title,
+      requestedProvider: requested.provider,
+      requestedModel,
+      requestedThinkingOptionId: input.parsedArgs.settings?.thinkingOptionId,
+      requestedRouting: input.parsedArgs.settings?.orchestration,
+      cwd: callerAgentId ? resolveCallerAgent()?.cwd : process.cwd(),
+      ...(callerAgentId ? { agentId: callerAgentId } : {}),
+      signal,
+    });
+    const providerModel = routing.appliedLane
+      ? `${routing.appliedLane.provider}/${routing.appliedLane.model}`
+      : input.parsedArgs.provider;
+    const thinkingOptionId = routing.appliedLane
+      ? routing.appliedLane.thinkingOptionId
+      : input.parsedArgs.settings?.thinkingOptionId;
+    return {
+      providerModel,
+      thinkingOptionId,
+      decisionRequest: applyCreateAgentRoutingToDecisionRequest(
+        buildCreateAgentDecisionRequest(input),
+        providerModel,
+        thinkingOptionId,
+      ),
+    };
   }
 
   function applyCreateAgentRoutingToDecisionRequest(
