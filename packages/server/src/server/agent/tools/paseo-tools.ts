@@ -100,7 +100,10 @@ import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-confi
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 import type { DecisionService } from "../../decisions/service.js";
 import { enforceAgentCreateDecision } from "../../decisions/agent-create-gate.js";
-import { routeOrchestrationTask } from "../../decisions/orchestration-routing.js";
+import {
+  recordOrchestrationTaskApplication,
+  routeOrchestrationTask,
+} from "../../decisions/orchestration-routing.js";
 
 export interface PaseoToolHostDependencies {
   agentManager: AgentManager;
@@ -118,6 +121,7 @@ export interface PaseoToolHostDependencies {
         | "getOrchestrationPolicy"
         | "assessOrchestrationTask"
         | "assessOrchestrationCheckpoint"
+        | "recordOrchestrationApplication"
       >
     >;
   github?: ForgeService;
@@ -1609,6 +1613,18 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         },
       );
 
+      recordOrchestrationTaskApplication({
+        service: options.decisionService,
+        outcome: routedCreate.routing.outcome,
+        requestedProvider: routedCreate.requestedProvider,
+        requestedModel: routedCreate.requestedModel,
+        requestedThinkingOptionId: routedCreate.requestedThinkingOptionId,
+        applied:
+          routedCreate.routing.outcome?.mode === "shadow"
+            ? "manual"
+            : (routedCreate.routing.appliedLane?.laneId ?? null),
+      });
+
       const blockingResponse = await blockingCreateAgentResponse({
         snapshot,
         createdInBackground,
@@ -1741,6 +1757,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     signal: AbortSignal,
   ): Promise<{
     routingMode: "manual" | "managed";
+    routing: Awaited<ReturnType<typeof routeOrchestrationTask>>;
+    requestedProvider: string;
+    requestedModel: string;
+    requestedThinkingOptionId: string | undefined;
     providerModel: string;
     thinkingOptionId: string | undefined;
     decisionRequest: JsonValue;
@@ -1768,6 +1788,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       : input.parsedArgs.settings?.thinkingOptionId;
     return {
       routingMode: routing.routing,
+      routing,
+      requestedProvider: requested.provider,
+      requestedModel,
+      requestedThinkingOptionId: input.parsedArgs.settings?.thinkingOptionId,
       providerModel,
       thinkingOptionId,
       decisionRequest: applyCreateAgentRoutingToDecisionRequest(
