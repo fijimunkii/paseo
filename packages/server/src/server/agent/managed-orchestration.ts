@@ -53,7 +53,8 @@ function requiresHumanReview(result: WaitForAgentResult): boolean {
 
 async function readWorkspaceEvidence(
   workspaceGitService:
-    | Pick<WorkspaceGitService, "getSnapshot" | "getCheckoutDiff">
+    | (Pick<WorkspaceGitService, "getSnapshot"> &
+        Partial<Pick<WorkspaceGitService, "getCheckoutDiff">>)
     | null
     | undefined,
   cwd: string,
@@ -73,7 +74,7 @@ async function readWorkspaceEvidence(
   try {
     const snapshot = await workspaceGitService.getSnapshot(cwd);
     let changedPaths: string[] = [];
-    if (snapshot.git.isGit) {
+    if (snapshot.git.isGit && workspaceGitService.getCheckoutDiff) {
       try {
         const diff = await workspaceGitService.getCheckoutDiff(cwd, {
           mode: "base",
@@ -103,7 +104,10 @@ async function readWorkspaceEvidence(
 
 async function collectTurnEvidence(input: {
   agentManager: AgentManager;
-  workspaceGitService?: Pick<WorkspaceGitService, "getSnapshot" | "getCheckoutDiff"> | null;
+  workspaceGitService?:
+    | (Pick<WorkspaceGitService, "getSnapshot"> &
+        Partial<Pick<WorkspaceGitService, "getCheckoutDiff">>)
+    | null;
   logger: Pick<Logger, "warn">;
   agentId: string;
   timelineStart: number;
