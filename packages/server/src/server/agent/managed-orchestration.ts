@@ -51,25 +51,49 @@ function requiresHumanReview(result: WaitForAgentResult): boolean {
   );
 }
 
-async function readGitEvidence(
-  workspaceGitService: Pick<WorkspaceGitService, "getSnapshot"> | null | undefined,
+async function readWorkspaceEvidence(
+  workspaceGitService:
+    | Pick<WorkspaceGitService, "getSnapshot" | "getCheckoutDiff">
+    | null
+    | undefined,
   cwd: string,
   agentId: string,
   logger: Pick<Logger, "warn">,
 ): Promise<{
-  isGit: boolean;
-  isDirty: boolean | null;
-  diffStat: { additions: number; deletions: number } | null;
+  git: {
+    isGit: boolean;
+    isDirty: boolean | null;
+    diffStat: { additions: number; deletions: number } | null;
+  };
+  changedPaths: string[];
 } | null> {
   if (!workspaceGitService) {
     return null;
   }
   try {
     const snapshot = await workspaceGitService.getSnapshot(cwd);
+    let changedPaths: string[] = [];
+    if (snapshot.git.isGit) {
+      try {
+        const diff = await workspaceGitService.getCheckoutDiff(cwd, {
+          mode: "base",
+          includeStructured: true,
+        });
+        changedPaths = (diff.structured ?? []).map((file) => file.path).sort().slice(0, 100);
+      } catch (error) {
+        logger.warn(
+          { err: error, agentId },
+          "Failed to collect changed paths for orchestration",
+        );
+      }
+    }
     return {
-      isGit: snapshot.git.isGit,
-      isDirty: snapshot.git.isDirty,
-      diffStat: snapshot.git.diffStat,
+      git: {
+        isGit: snapshot.git.isGit,
+        isDirty: snapshot.git.isDirty,
+        diffStat: snapshot.git.diffStat,
+      },
+      changedPaths,
     };
   } catch (error) {
     logger.warn({ err: error, agentId }, "Failed to collect git evidence for orchestration");
@@ -79,7 +103,7 @@ async function readGitEvidence(
 
 async function collectTurnEvidence(input: {
   agentManager: AgentManager;
-  workspaceGitService?: Pick<WorkspaceGitService, "getSnapshot"> | null;
+  workspaceGitService?: Pick<WorkspaceGitService, "getSnapshot" | "getCheckoutDiff"> | null;
   logger: Pick<Logger, "warn">;
   agentId: string;
   timelineStart: number;
@@ -87,8 +111,8 @@ async function collectTurnEvidence(input: {
 }): Promise<OrchestrationEvidence> {
   const snapshot = input.agentManager.getAgent(input.agentId);
   const timeline = input.agentManager.getTimeline(input.agentId).slice(input.timelineStart);
-  const git = snapshot
-    ? await readGitEvidence(input.workspaceGitService, snapshot.cwd, input.agentId, input.logger)
+  const workspace = snapshot
+    ? await readWorkspaceEvidence(input.workspaceGitService, snapshot.cwd, input.agentId, input.logger)
     : null;
 
   return buildOrchestrationEvidence({
@@ -96,8 +120,8 @@ async function collectTurnEvidence(input: {
     turnStatus: turnStatus(input.result),
     ...(input.result.status === "error" ? { errorKind: "agent_error" } : {}),
     requiresHumanReview: requiresHumanReview(input.result),
-    assistantResult: input.result.lastMessage,
-    git,
+    changedPaths: workspace?.changedPaths,
+    git: workspace?.git ?? null,
   });
 }
 
