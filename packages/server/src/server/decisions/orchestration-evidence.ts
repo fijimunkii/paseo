@@ -32,21 +32,40 @@ export interface OrchestrationEvidence {
 const MAX_ASSISTANT_RESULT_CHARS = 2_000;
 
 function classifyVerificationCommand(command: string): OrchestrationCheckKind | null {
-  const normalized = command.toLowerCase();
+  if (/[\r\n]/u.test(command)) {
+    return null;
+  }
+  const normalized = command.trim().replace(/\s+/gu, " ").toLowerCase();
+  if (!normalized || /(?:&&|\|\||[;|<>\`]|\$\()/u.test(normalized)) {
+    return null;
+  }
+
   if (
-    /\b(pytest|vitest|jest|cargo\s+test|go\s+test|npm\s+(run\s+)?test|pnpm\s+(run\s+)?test|yarn\s+(run\s+)?test|bun\s+(run\s+)?test)\b/u.test(
+    /^(?:(?:npm|pnpm|yarn|bun)(?: run)? test\b|npx (?:vitest|jest)\b|(?:vitest|jest|pytest)\b|python(?:3)? -m pytest\b|cargo test\b|go test\b)/u.test(
       normalized,
     )
   ) {
     return "test";
   }
-  if (/\b(typecheck|tsc\b|mypy\b|pyright\b)\b/u.test(normalized)) {
+  if (
+    /^(?:(?:npm|pnpm|yarn|bun)(?: run)? typecheck\b|npx (?:tsc|mypy|pyright)\b|(?:tsc|mypy|pyright)\b)/u.test(
+      normalized,
+    )
+  ) {
     return "typecheck";
   }
-  if (/\b(lint|eslint\b|oxlint\b|ruff\s+check)\b/u.test(normalized)) {
+  if (
+    /^(?:(?:npm|pnpm|yarn|bun)(?: run)? lint\b|npx (?:eslint|oxlint)\b|(?:eslint|oxlint)\b|ruff check\b)/u.test(
+      normalized,
+    )
+  ) {
     return "lint";
   }
-  if (/\b(build|compile|cargo\s+check|go\s+vet)\b/u.test(normalized)) {
+  if (
+    /^(?:(?:npm|pnpm|yarn)(?: run)? build\b|bun run build\b|cargo (?:build|check)\b|go (?:build|vet)\b)/u.test(
+      normalized,
+    )
+  ) {
     return "build";
   }
   return null;
