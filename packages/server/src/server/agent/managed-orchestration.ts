@@ -80,12 +80,12 @@ async function readWorkspaceEvidence(
           mode: "base",
           includeStructured: true,
         });
-        changedPaths = (diff.structured ?? []).map((file) => file.path).sort().slice(0, 100);
+        changedPaths = (diff.structured ?? [])
+          .map((file) => file.path)
+          .sort()
+          .slice(0, 100);
       } catch (error) {
-        logger.warn(
-          { err: error, agentId },
-          "Failed to collect changed paths for orchestration",
-        );
+        logger.warn({ err: error, agentId }, "Failed to collect changed paths for orchestration");
       }
     }
     return {
@@ -116,7 +116,12 @@ async function collectTurnEvidence(input: {
   const snapshot = input.agentManager.getAgent(input.agentId);
   const timeline = input.agentManager.getTimeline(input.agentId).slice(input.timelineStart);
   const workspace = snapshot
-    ? await readWorkspaceEvidence(input.workspaceGitService, snapshot.cwd, input.agentId, input.logger)
+    ? await readWorkspaceEvidence(
+        input.workspaceGitService,
+        snapshot.cwd,
+        input.agentId,
+        input.logger,
+      )
     : null;
 
   return buildOrchestrationEvidence({
