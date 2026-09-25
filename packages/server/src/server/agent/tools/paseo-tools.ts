@@ -64,6 +64,7 @@ import {
   waitForAgentWithTimeout,
 } from "../mcp-shared.js";
 import { sendPromptToAgent, setupFinishNotification } from "../agent-prompt.js";
+import { routeManagedAgentTask, runManagedAgentLoop } from "../managed-orchestration.js";
 import { respondToAgentPermission } from "../permission-response.js";
 import {
   archiveAgentCommand,
@@ -110,7 +111,15 @@ export interface PaseoToolHostDependencies {
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
   decisionService?: Pick<DecisionService, "authorizeAgentCreate" | "consumeAgentCreatePermit"> &
-    Partial<Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationTask">>;
+    Partial<
+      Pick<
+        DecisionService,
+        | "getDecisionMode"
+        | "getOrchestrationPolicy"
+        | "assessOrchestrationTask"
+        | "assessOrchestrationCheckpoint"
+      >
+    >;
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -1132,6 +1141,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     agentId: z.string(),
     prompt: z.string(),
     sessionMode: z.string().optional().describe("Optional mode to set before running the prompt."),
+    orchestration: OrchestrationRoutingModeSchema.optional().describe(
+      "Use manual settings or opt this task into Paseo-managed Jev orchestration.",
+    ),
   };
   const agentToAgentSendAgentPromptInputSchema = {
     ...commonSendAgentPromptInputSchema,
@@ -2138,14 +2150,30 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         guidance: z.string().optional(),
       },
     },
-    async ({
-      agentId,
-      prompt,
-      sessionMode,
-      background = Boolean(callerAgentId),
-      notifyOnFinish = Boolean(callerAgentId),
-    }) => {
+    async (
+      {
+        agentId,
+        prompt,
+        sessionMode,
+        orchestration,
+        background = Boolean(callerAgentId),
+        notifyOnFinish = Boolean(callerAgentId),
+      },
+      context,
+    ) => {
       const shouldNotifyOnFinish = Boolean(callerAgentId && notifyOnFinish && background);
+      const signal = context.signal ?? new AbortController().signal;
+      const routing = await routeManagedAgentTask({
+        decisionService: options.decisionService,
+        agentManager,
+        agentStorage,
+        providerSnapshotManager,
+        agentId,
+        task: prompt,
+        routing: orchestration,
+        signal,
+      });
+      const timelineStart = agentManager.getTimeline(agentId).length;
 
       await sendPromptToAgent({
         agentManager,
@@ -2168,15 +2196,41 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
       // If not running in background, wait for completion
       if (!background) {
-        const result = await waitForAgentWithTimeout(agentManager, agentId, {
+        let result = await waitForAgentWithTimeout(agentManager, agentId, {
+          signal,
           waitForActive: true,
         });
+        let orchestrationGuidance: string | undefined;
+        if (routing.routing === "managed") {
+          const managed = await runManagedAgentLoop({
+            decisionService: options.decisionService,
+            agentManager,
+            agentStorage,
+            providerSnapshotManager,
+            workspaceGitService: options.workspaceGitService,
+            logger: childLogger,
+            agentId,
+            task: prompt,
+            initialTimelineStart: timelineStart,
+            initialWaitResult: result,
+            signal,
+          });
+          if (managed) {
+            result = managed.waitResult;
+            orchestrationGuidance = managed.loop.shadow
+              ? `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`
+              : managed.loop.directive === "review"
+                ? "Paseo managed orchestration requires human review before continuing."
+                : undefined;
+          }
+        }
 
         const responseData = {
           success: true,
           status: result.status,
           lastMessage: result.lastMessage,
           permission: sanitizePermissionRequest(result.permission),
+          ...(orchestrationGuidance ? { guidance: orchestrationGuidance } : {}),
         };
         const validJson = ensureValidJson(responseData);
 
