@@ -26,6 +26,7 @@ function evidence(
 ): OrchestrationEvidence {
   return {
     requiresHumanReview: false,
+    changedPaths: [],
     turn: { status: "completed" },
     verificationStatus,
     checks:
@@ -39,7 +40,6 @@ function evidence(
       additions: 4,
       deletions: 1,
     },
-    assistantResult: "Finished the current pass.",
   };
 }
 
@@ -128,8 +128,43 @@ describe("runManagedOrchestrationLoop", () => {
     expect(runContinuation.mock.calls[0]?.[0]).toContain("deterministic verification");
     expect(result).toMatchObject({
       directive: "complete",
-      attempts: 2,
+      attempts: 1,
       shadow: false,
+    });
+  });
+
+  test("verification remains available after the implementation attempt budget is exhausted", async () => {
+    const verificationPolicy: OrchestrationDecisionPolicyConfig = {
+      ...policy,
+      maxAttempts: 1,
+      maxEscalations: 0,
+    };
+    const checkpointService: Pick<
+      DecisionService,
+      "getDecisionMode" | "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
+    > = {
+      getDecisionMode: () => "enforce",
+      getOrchestrationPolicy: () => verificationPolicy,
+      assessOrchestrationCheckpoint: vi.fn(async () => outcome("complete")),
+    };
+    const runContinuation = vi.fn(async () => evidence("passed"));
+
+    const result = await runManagedOrchestrationLoop({
+      service: checkpointService,
+      providerCatalog: { getProvider: vi.fn(async () => providerEntry()) },
+      callbacks: { runContinuation, applyLane: vi.fn() },
+      task: "Implement the feature",
+      agentId: "agent-1",
+      provider: "codex",
+      initialEvidence: evidence("not_run"),
+      signal: new AbortController().signal,
+    });
+
+    expect(runContinuation).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      directive: "complete",
+      attempts: 1,
+      escalations: 0,
     });
   });
 
