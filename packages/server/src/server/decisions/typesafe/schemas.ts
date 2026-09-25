@@ -56,7 +56,7 @@ export const TypeSafeModelsResponseSchema = z
           description: z.string(),
           release_date: z.string().min(1),
         })
-        .strict(),
+        .passthrough(),
     ),
   })
   .strict();

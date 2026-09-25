@@ -1,7 +1,4 @@
-import type {
-  DecisionAnswer,
-  DecisionQuestion,
-} from "./engine.js";
+import type { DecisionAnswer, DecisionQuestion } from "./engine.js";
 
 export type DecisionDisposition =
   | { kind: "allow" }
@@ -12,6 +9,7 @@ export type DecisionDisposition =
 export interface DecisionDefinition {
   id: string;
   version: string;
+  policyVersion: string;
   questions: Record<string, DecisionQuestion>;
   resolve(
     answers: Readonly<Record<string, DecisionAnswer>>,
@@ -22,20 +20,20 @@ export interface DecisionDefinition {
 const AGENT_CREATE_QUESTION = "disposition";
 
 export const AGENT_CREATE_DECISION: DecisionDefinition = {
-  id: "agent.create",
+  id: "tool.create_agent",
   version: "1",
+  policyVersion: "1",
   questions: {
     [AGENT_CREATE_QUESTION]: {
       type: "choice",
       instructions:
-        "Decide whether Paseo should allow this proposed agent creation based on the supplied operation state.",
+        "Decide whether Paseo should autonomously execute this create_agent operation based on its boundedness, clarity, and risk.",
       criteria: {
         allow:
-          "The proposed agent creation is within scope and can proceed autonomously.",
+          "The request is clear, bounded, and ordinary enough to create the agent autonomously.",
         review:
-          "The proposal is ambiguous, unusually broad, or should require human review before proceeding.",
-        deny:
-          "The proposed agent creation is clearly outside scope or should not proceed.",
+          "The request is ambiguous, unusually broad, sensitive, privileged, or otherwise warrants human review before creating the agent.",
+        deny: "The request clearly asks for a destructive or disallowed delegation that should not create an agent.",
       },
     },
   },

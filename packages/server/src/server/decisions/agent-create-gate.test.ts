@@ -33,14 +33,67 @@ describe("enforceAgentCreateDecision", () => {
     ).resolves.toBeUndefined();
   });
 
+  test("does not invoke the decision service for an already canceled call", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller canceled"));
+    const gate = gateWithAuthorization(null);
+
+    await expect(
+      enforceAgentCreateDecision({
+        service: gate,
+        request,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("caller canceled");
+    expect(gate.authorizeAgentCreate).not.toHaveBeenCalled();
+  });
+
+  test("stops after evaluation when the caller cancels before permit consumption", async () => {
+    const controller = new AbortController();
+    const permit = {
+      id: "permit-late-cancel",
+      decisionFingerprint: "f".repeat(64),
+      operationFingerprint: "1".repeat(64),
+      model: "jev-pinned-test",
+      disposition: "allow" as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    const gate = {
+      authorizeAgentCreate: vi.fn().mockImplementation(async () => {
+        controller.abort(new Error("late cancel"));
+        return {
+          fingerprint: permit.decisionFingerprint,
+          mode: "enforce" as const,
+          actualDisposition: { kind: "allow" as const },
+          wouldDisposition: { kind: "allow" as const },
+          reused: false,
+          permit,
+        };
+      }),
+      consumeAgentCreatePermit: vi.fn(),
+    };
+
+    await expect(
+      enforceAgentCreateDecision({
+        service: gate,
+        request,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("late cancel");
+    expect(gate.consumeAgentCreatePermit).not.toHaveBeenCalled();
+  });
+
   test("allows shadow execution while consuming the exact-operation permit", async () => {
     const permit = {
       id: "permit-1",
-      fingerprint: "a".repeat(64),
+      decisionFingerprint: "a".repeat(64),
+      operationFingerprint: "2".repeat(64),
+      model: null,
+      disposition: "allow" as const,
       expiresAt: Date.now() + 60_000,
     };
     const gate = gateWithAuthorization({
-      fingerprint: permit.fingerprint,
+      fingerprint: permit.decisionFingerprint,
       mode: "shadow",
       actualDisposition: { kind: "allow" },
       wouldDisposition: { kind: "deny" },
@@ -76,12 +129,15 @@ describe("enforceAgentCreateDecision", () => {
     expect(gate.consumeAgentCreatePermit).toHaveBeenCalledWith(permit, operation);
   });
 
-  test("does not send passthrough fields or runtime settings to Jev", async () => {
+  test("does not send passthrough fields, labels, or arbitrary feature values to Jev", async () => {
     const gate = gateWithAuthorization(null);
     const requestWithExtra = {
       ...request,
       labels: { sensitivity: "internal" },
-      settings: { thinkingOptionId: "high" },
+      settings: {
+        thinkingOptionId: "high",
+        features: { privateFeaturePayload: "do-not-send" },
+      },
       arbitrarySecret: "do-not-send",
     } satisfies JsonValue;
 
@@ -97,6 +153,9 @@ describe("enforceAgentCreateDecision", () => {
           title: "Investigate",
           provider: "codex/gpt-5.6",
           initialPrompt: "Inspect the failing test",
+          settings: {
+            thinkingOptionId: "high",
+          },
         },
       }),
     );

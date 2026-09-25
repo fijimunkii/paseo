@@ -17,15 +17,8 @@ const AGENT_CREATE_STATE_KEYS = [
   "title",
   "provider",
   "initialPrompt",
-  "workspaceId",
   "relationship",
   "workspace",
-  "cwd",
-  "worktreeName",
-  "branchName",
-  "baseBranch",
-  "refName",
-  "githubPrNumber",
 ] as const;
 
 function buildAgentCreateDecisionState(request: JsonValue): Record<string, JsonValue> {
@@ -40,7 +33,32 @@ function buildAgentCreateDecisionState(request: JsonValue): Record<string, JsonV
       state[key] = value;
     }
   }
+
+  const settings = request.settings;
+  if (settings && typeof settings === "object" && !Array.isArray(settings)) {
+    const safeSettings: Record<string, JsonValue> = {};
+    if (typeof settings.modeId === "string") {
+      safeSettings.modeId = settings.modeId;
+    }
+    if (typeof settings.thinkingOptionId === "string") {
+      safeSettings.thinkingOptionId = settings.thinkingOptionId;
+    }
+    if (Object.keys(safeSettings).length > 0) {
+      state.settings = safeSettings;
+    }
+  }
+
   return state;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (!signal.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  throw new Error("create_agent request was canceled");
 }
 
 export class AgentCreateDecisionError extends Error {
@@ -69,6 +87,7 @@ export async function enforceAgentCreateDecision(input: {
     return;
   }
 
+  throwIfAborted(input.signal);
   const operation: Record<string, JsonValue> = {
     tool: "create_agent",
     callerAgentId: input.callerAgentId ?? null,
@@ -87,6 +106,7 @@ export async function enforceAgentCreateDecision(input: {
     return;
   }
 
+  throwIfAborted(input.signal);
   if (authorization.actualDisposition.kind === "deny") {
     throw new AgentCreateDecisionError("deny", authorization.fingerprint);
   }

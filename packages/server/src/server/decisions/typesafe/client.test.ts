@@ -1,14 +1,11 @@
 import { describe, expect, test } from "vitest";
 
 import type { DecisionRequest } from "../engine.js";
-import {
-  createTypeSafeDecisionEngine,
-  TypeSafeDecisionError,
-} from "./client.js";
+import { createTypeSafeDecisionEngine, TypeSafeDecisionError } from "./client.js";
 
 const request: DecisionRequest = {
   state: { command: "npm test", risk: "low" },
-  model: "jev-1.13.0",
+  model: "jev-pinned-test",
   questions: {
     allowed: {
       type: "noul",
@@ -33,7 +30,7 @@ const request: DecisionRequest = {
 
 function successPayload() {
   return {
-    model: "jev-1.13.0",
+    model: "jev-pinned-test",
     answers: {
       allowed: { type: "noul", noul: 0.92 },
       action: {
@@ -74,10 +71,7 @@ describe("TypeSafe decision engine", () => {
     let requestUrl = "";
     let requestInit: RequestInit | undefined;
 
-    async function fakeFetch(
-      input: string | URL | Request,
-      init?: RequestInit,
-    ): Promise<Response> {
+    async function fakeFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
       requestUrl = String(input);
       requestInit = init;
       return new Response(JSON.stringify(successPayload()), {
@@ -101,7 +95,7 @@ describe("TypeSafe decision engine", () => {
     expect(JSON.parse(String(requestInit?.body))).toEqual(request);
     expect(result).toEqual({
       engine: "typesafe-jev",
-      model: "jev-1.13.0",
+      model: "jev-pinned-test",
       answers: {
         allowed: { type: "noul", probability: 0.92 },
         action: {
@@ -254,9 +248,7 @@ describe("TypeSafe decision engine", () => {
       fetch: hangingFetch,
     });
 
-    await expect(
-      engine.evaluate(request, { signal: controller.signal }),
-    ).rejects.toMatchObject({
+    await expect(engine.evaluate(request, { signal: controller.signal })).rejects.toMatchObject({
       kind: "aborted",
     });
     expect(calls).toBe(1);
@@ -268,9 +260,10 @@ describe("TypeSafe decision engine", () => {
         JSON.stringify({
           models: [
             {
-              name: "jev-1.13.0",
+              name: "jev-pinned-test",
               description: "Pinned Jev release",
               release_date: "2026-09-15",
+              tags: ["internal"],
             },
           ],
         }),
@@ -283,15 +276,23 @@ describe("TypeSafe decision engine", () => {
       fetch: fakeFetch,
     });
 
-    await expect(
-      engine.listModels({ signal: new AbortController().signal }),
-    ).resolves.toEqual([
+    await expect(engine.listModels({ signal: new AbortController().signal })).resolves.toEqual([
       {
-        name: "jev-1.13.0",
+        name: "jev-pinned-test",
         description: "Pinned Jev release",
         release_date: "2026-09-15",
+        tags: ["internal"],
       },
     ]);
+  });
+
+  test("rejects TypeSafe base URLs with embedded credentials", () => {
+    expect(() =>
+      createTypeSafeDecisionEngine({
+        apiKey: "test-secret",
+        baseUrl: "https://user:password@typesafe.example.test",
+      }),
+    ).toThrowError(TypeSafeDecisionError);
   });
 
   test("rejects insecure non-local TypeSafe base URLs", () => {

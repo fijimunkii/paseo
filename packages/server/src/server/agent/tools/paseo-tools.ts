@@ -4,6 +4,7 @@ import { ensureValidJson } from "../../json-utils.js";
 import type { Logger } from "pino";
 
 import type { AgentMode, AgentProvider, AgentSessionConfig } from "../agent-sdk-types.js";
+import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type { AgentManager } from "../agent-manager.js";
 import { AgentProfileSchema } from "@getpaseo/protocol/messages";
 import type { DaemonConfigStore } from "../../daemon-config-store.js";
@@ -106,10 +107,7 @@ export interface PaseoToolHostDependencies {
   scheduleService?: ScheduleService | null;
   providerSnapshotManager: ProviderSnapshotManager;
   daemonConfigStore?: Pick<DaemonConfigStore, "get">;
-  decisionService?: Pick<
-    DecisionService,
-    "authorizeAgentCreate" | "consumeAgentCreatePermit"
-  >;
+  decisionService?: Pick<DecisionService, "authorizeAgentCreate" | "consumeAgentCreatePermit">;
   github?: ForgeService;
   workspaceGitService?: Pick<
     WorkspaceGitService,
@@ -1450,14 +1448,15 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       },
     },
     async (args: unknown, context) => {
+      const parsedDecisionArgs = parseCreateAgentToolArgs(args);
       await enforceAgentCreateDecision({
         service: options.decisionService,
-        request: z.json().parse(args),
+        request: buildCreateAgentDecisionRequest(parsedDecisionArgs),
         ...(callerAgentId ? { callerAgentId } : {}),
         signal: context.signal ?? new AbortController().signal,
       });
 
-      const resolvedArgs = await resolveCreateAgentToolArgs(args);
+      const resolvedArgs = await resolveCreateAgentToolArgs(parsedDecisionArgs);
       const { parsedArgs, worktree } = resolvedArgs;
       let requestedBackground: boolean;
       let notifyOnFinish: boolean;
@@ -1565,6 +1564,153 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     },
   );
 
+  type ParsedCreateAgentToolArgs =
+    | {
+        kind: "agent-scoped";
+        syntax: "canonical";
+        parsedArgs: AgentToAgentCreateAgentArgs;
+      }
+    | {
+        kind: "agent-scoped";
+        syntax: "legacy";
+        parsedArgs: LegacyAgentToAgentCreateAgentArgs;
+      }
+    | {
+        kind: "top-level";
+        syntax: "canonical";
+        parsedArgs: TopLevelCreateAgentArgs;
+      }
+    | {
+        kind: "top-level";
+        syntax: "legacy";
+        parsedArgs: LegacyTopLevelCreateAgentArgs;
+      };
+
+  function parseCreateAgentToolArgs(args: unknown): ParsedCreateAgentToolArgs {
+    if (callerAgentId) {
+      if (hasLegacyCreateAgentPlacement(args)) {
+        // COMPAT(nestedCreateAgentPlacement): accept the old relationship/workspace shape without
+        // advertising it to models. Added in v0.2.0; remove after 2027-01-17.
+        return {
+          kind: "agent-scoped",
+          syntax: "legacy",
+          parsedArgs: legacyAgentToAgentCreateAgentArgsSchema.parse(args),
+        };
+      }
+      return {
+        kind: "agent-scoped",
+        syntax: "canonical",
+        parsedArgs: agentToAgentCreateAgentArgsSchema.parse(args),
+      };
+    }
+
+    if (hasLegacyCreateAgentPlacement(args)) {
+      // COMPAT(nestedCreateAgentPlacement): see the agent-scoped branch above.
+      const parsedArgs = normalizeTopLevelCreateAgentArgs(
+        legacyTopLevelCreateAgentArgsSchema.parse(args),
+      );
+      if (parsedArgs.relationship?.kind === "subagent") {
+        throw new Error("relationship subagent requires an agent-scoped tool session");
+      }
+      if (!parsedArgs.workspace) {
+        throw new Error("Legacy create_agent placement could not be resolved");
+      }
+      return {
+        kind: "top-level",
+        syntax: "legacy",
+        parsedArgs,
+      };
+    }
+
+    return {
+      kind: "top-level",
+      syntax: "canonical",
+      parsedArgs: canonicalTopLevelCreateAgentArgsSchema.parse(args),
+    };
+  }
+
+  type CommonParsedCreateAgentArgs = Pick<
+    AgentToAgentCreateAgentArgs,
+    "title" | "provider" | "initialPrompt" | "labels" | "settings"
+  >;
+
+  function finalizeCreateAgentDecisionRequest(input: {
+    parsedArgs: CommonParsedCreateAgentArgs;
+    relationship: JsonValue;
+    workspace: JsonValue;
+    background: boolean;
+    notifyOnFinish: boolean;
+  }): JsonValue {
+    return z.json().parse({
+      title: input.parsedArgs.title,
+      provider: input.parsedArgs.provider,
+      initialPrompt: input.parsedArgs.initialPrompt,
+      relationship: input.relationship,
+      workspace: input.workspace,
+      background: input.background,
+      notifyOnFinish: input.notifyOnFinish,
+      ...(input.parsedArgs.labels ? { labels: input.parsedArgs.labels } : {}),
+      ...(input.parsedArgs.settings ? { settings: input.parsedArgs.settings } : {}),
+    });
+  }
+
+  function buildCreateAgentDecisionRequest(input: ParsedCreateAgentToolArgs): JsonValue {
+    if (input.kind === "agent-scoped" && input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: parsedArgs.relationship,
+        workspace: parsedArgs.workspace,
+        background: true,
+        notifyOnFinish: parsedArgs.notifyOnFinish,
+      });
+    }
+
+    if (input.kind === "agent-scoped") {
+      const parsedArgs = input.parsedArgs;
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: { kind: "subagent" },
+        workspace: parsedArgs.workspaceId
+          ? { kind: "existing", workspaceId: parsedArgs.workspaceId }
+          : { kind: "current" },
+        background: true,
+        notifyOnFinish: parsedArgs.notifyOnFinish,
+      });
+    }
+
+    if (input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
+      if (!parsedArgs.workspace) {
+        throw new Error("Legacy create_agent placement could not be resolved");
+      }
+      return finalizeCreateAgentDecisionRequest({
+        parsedArgs,
+        relationship: parsedArgs.relationship ?? { kind: "detached" },
+        workspace: parsedArgs.workspace,
+        background: parsedArgs.background,
+        notifyOnFinish: parsedArgs.notifyOnFinish ?? false,
+      });
+    }
+
+    const parsedArgs = input.parsedArgs;
+    return finalizeCreateAgentDecisionRequest({
+      parsedArgs,
+      relationship: { kind: "detached" },
+      workspace: parsedArgs.workspaceId
+        ? { kind: "existing", workspaceId: parsedArgs.workspaceId }
+        : {
+            kind: "create",
+            source: {
+              kind: "directory",
+              path: process.cwd(),
+            },
+          },
+      background: parsedArgs.background,
+      notifyOnFinish: parsedArgs.notifyOnFinish ?? false,
+    });
+  }
+
   type ResolvedCreateAgentToolArgs =
     | {
         kind: "agent-scoped";
@@ -1583,25 +1729,26 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: CreateAgentFromMcpInput["worktree"];
       };
 
-  async function resolveCreateAgentToolArgs(args: unknown): Promise<ResolvedCreateAgentToolArgs> {
-    if (callerAgentId) {
-      if (hasLegacyCreateAgentPlacement(args)) {
-        // COMPAT(nestedCreateAgentPlacement): accept the old relationship/workspace shape without
-        // advertising it to models. Added in v0.2.0; remove after 2027-01-17.
-        const parsed = legacyAgentToAgentCreateAgentArgsSchema.parse(args);
-        const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(parsed.workspace, {
-          prompt: parsed.initialPrompt,
-        });
-        return {
-          kind: "agent-scoped",
-          parsedArgs: parsed,
-          detached: parsed.relationship.kind === "detached",
-          cwd,
-          workspaceId,
-          worktree,
-        };
-      }
-      const parsed = agentToAgentCreateAgentArgsSchema.parse(args);
+  async function resolveCreateAgentToolArgs(
+    input: ParsedCreateAgentToolArgs,
+  ): Promise<ResolvedCreateAgentToolArgs> {
+    if (input.kind === "agent-scoped" && input.syntax === "legacy") {
+      const parsed = input.parsedArgs;
+      const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(parsed.workspace, {
+        prompt: parsed.initialPrompt,
+      });
+      return {
+        kind: "agent-scoped",
+        parsedArgs: parsed,
+        detached: parsed.relationship.kind === "detached",
+        cwd,
+        workspaceId,
+        worktree,
+      };
+    }
+
+    if (input.kind === "agent-scoped") {
+      const parsed = input.parsedArgs;
       const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(parsed.workspaceId, {
         prompt: parsed.initialPrompt,
       });
@@ -1614,14 +1761,9 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree: undefined,
       };
     }
-    if (hasLegacyCreateAgentPlacement(args)) {
-      // COMPAT(nestedCreateAgentPlacement): see the agent-scoped branch above.
-      const parsedArgs = normalizeTopLevelCreateAgentArgs(
-        legacyTopLevelCreateAgentArgsSchema.parse(args),
-      );
-      if (parsedArgs.relationship?.kind === "subagent") {
-        throw new Error("relationship subagent requires an agent-scoped tool session");
-      }
+
+    if (input.syntax === "legacy") {
+      const parsedArgs = input.parsedArgs;
       if (!parsedArgs.workspace) {
         throw new Error("Legacy create_agent placement could not be resolved");
       }
@@ -1638,7 +1780,8 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         worktree,
       };
     }
-    const parsedArgs = canonicalTopLevelCreateAgentArgsSchema.parse(args);
+
+    const parsedArgs = input.parsedArgs;
     const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(
       parsedArgs.workspaceId,
       { prompt: parsedArgs.initialPrompt },

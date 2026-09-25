@@ -41,7 +41,7 @@ describe("daemon decision config", () => {
           model: "jev-latest",
         },
         policies: {
-          agentCreate: {
+          createAgentTool: {
             enabled: true,
           },
         },
@@ -63,7 +63,7 @@ describe("daemon decision config", () => {
         apiKey: "typesafe-secret",
       },
       policies: {
-        agentCreate: {
+        createAgentTool: {
           enabled: true,
           minimumConfidence: 0.9,
           failureDisposition: "review",
@@ -105,7 +105,7 @@ describe("daemon decision config", () => {
           model: "jev-latest",
         },
         policies: {
-          agentCreate: {
+          createAgentTool: {
             enabled: true,
           },
         },
@@ -124,10 +124,10 @@ describe("daemon decision config", () => {
         mode: "enforce",
         typesafe: {
           enabled: true,
-          model: "jev-1.13.0",
+          model: "jev-pinned-test",
         },
         policies: {
-          agentCreate: {
+          createAgentTool: {
             enabled: true,
             minimumConfidence: 0.95,
             failureDisposition: "deny",
@@ -136,14 +136,16 @@ describe("daemon decision config", () => {
       },
     });
 
-    expect(loadConfig(home, { env: { TYPESAFE_API_KEY: "typesafe-secret" } }).decisions).toMatchObject({
+    expect(
+      loadConfig(home, { env: { TYPESAFE_API_KEY: "typesafe-secret" } }).decisions,
+    ).toMatchObject({
       mode: "enforce",
       typesafe: {
-        model: "jev-1.13.0",
+        model: "jev-pinned-test",
         apiKey: "typesafe-secret",
       },
       policies: {
-        agentCreate: {
+        createAgentTool: {
           enabled: true,
           minimumConfidence: 0.95,
           failureDisposition: "deny",

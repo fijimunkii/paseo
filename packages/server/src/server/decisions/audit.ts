@@ -32,6 +32,7 @@ export const DecisionAuditRecordSchema = z
     definitionId: z.string().min(1),
     definitionVersion: z.string().min(1),
     definitionHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    policyVersion: z.string().min(1),
     policyHash: z.string().regex(/^[a-f0-9]{64}$/u),
     requestedModel: z.string().min(1),
     model: z.string().min(1).nullable(),

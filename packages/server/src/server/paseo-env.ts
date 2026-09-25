@@ -1,13 +1,14 @@
 const PASEO_NODE_ENV = "PASEO_NODE_ENV";
 const ELECTRON_RUN_AS_NODE = "ELECTRON_RUN_AS_NODE";
 
-const RUNTIME_CONTROL_ENV_KEYS = [
+const EXTERNAL_PROCESS_STRIPPED_ENV_KEYS = [
   PASEO_NODE_ENV,
   "PASEO_DESKTOP_MANAGED",
   "PASEO_SUPERVISED",
   ELECTRON_RUN_AS_NODE,
   "ELECTRON_NO_ATTACH_CONSOLE",
   "ESBUILD_BINARY_PATH",
+  "TYPESAFE_API_KEY",
 ] as const;
 
 export type PaseoNodeEnv = "development" | "production" | "test";
@@ -23,7 +24,7 @@ function buildExternalProcessEnv(
   overlays: ProcessEnvRecord[],
 ): ExternalProcessEnv {
   const sanitized = Object.assign({}, baseEnv, ...overlays);
-  for (const key of RUNTIME_CONTROL_ENV_KEYS) {
+  for (const key of EXTERNAL_PROCESS_STRIPPED_ENV_KEYS) {
     delete sanitized[key];
   }
   for (const [key, value] of Object.entries(sanitized)) {
@@ -64,6 +65,7 @@ export function buildSelfNodeCommand(
 } {
   const env = buildExternalProcessEnv(process.env, []);
   Object.assign(env, { [ELECTRON_RUN_AS_NODE]: "1" }, envOverlay);
+  delete env.TYPESAFE_API_KEY;
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) {
       delete env[key];

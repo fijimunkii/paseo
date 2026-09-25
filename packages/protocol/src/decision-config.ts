@@ -13,7 +13,7 @@ export const TypeSafeDecisionConfigSchema = z
   })
   .strict();
 
-export const AgentCreateDecisionPolicyConfigSchema = z
+export const CreateAgentToolDecisionPolicyConfigSchema = z
   .object({
     enabled: z.boolean().default(false),
     minimumConfidence: z.number().min(0).max(1).default(0.9),
@@ -23,7 +23,7 @@ export const AgentCreateDecisionPolicyConfigSchema = z
 
 export const DecisionPoliciesConfigSchema = z
   .object({
-    agentCreate: AgentCreateDecisionPolicyConfigSchema.optional(),
+    createAgentTool: CreateAgentToolDecisionPolicyConfigSchema.optional(),
   })
   .strict();
 
@@ -38,8 +38,8 @@ export const DecisionConfigSchema = z
 export type DecisionMode = z.infer<typeof DecisionModeSchema>;
 export type DecisionFailureDisposition = z.infer<typeof DecisionFailureDispositionSchema>;
 export type TypeSafeDecisionConfig = z.infer<typeof TypeSafeDecisionConfigSchema>;
-export type AgentCreateDecisionPolicyConfig = z.infer<
-  typeof AgentCreateDecisionPolicyConfigSchema
+export type CreateAgentToolDecisionPolicyConfig = z.infer<
+  typeof CreateAgentToolDecisionPolicyConfigSchema
 >;
 export type DecisionPoliciesConfig = z.infer<typeof DecisionPoliciesConfigSchema>;
 export type DecisionConfig = z.infer<typeof DecisionConfigSchema>;

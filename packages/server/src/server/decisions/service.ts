@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import type {
-  AgentCreateDecisionPolicyConfig,
+  CreateAgentToolDecisionPolicyConfig,
   DecisionConfig,
   DecisionFailureDisposition,
   TypeSafeDecisionConfig,
@@ -61,11 +61,6 @@ interface DecisionServiceOptions {
   now?: () => number;
 }
 
-interface ResolvedPolicy {
-  definition: DecisionDefinition;
-  config: AgentCreateDecisionPolicyConfig;
-}
-
 const ALLOW: DecisionDisposition = { kind: "allow" };
 
 function canonicalJson(value: JsonValue): string {
@@ -73,7 +68,11 @@ function canonicalJson(value: JsonValue): string {
     return "null";
   }
   if (typeof value === "string") {
-    return JSON.stringify(value) ?? "\"\"";
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new Error("Failed to serialize decision string");
+    }
+    return serialized;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
@@ -112,6 +111,33 @@ function errorKind(error: unknown): string {
   return "unknown";
 }
 
+function callerAbortError(): TypeSafeDecisionError {
+  return new TypeSafeDecisionError("aborted", "Decision request was canceled");
+}
+
+async function awaitWithCallerAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    throw callerAbortError();
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(callerAbortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        return resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        return reject(error);
+      },
+    );
+  });
+}
+
 export class DecisionService {
   private readonly config: DecisionRuntimeConfig;
   private readonly logger: Pick<Logger, "info" | "warn">;
@@ -146,19 +172,17 @@ export class DecisionService {
         : null;
   }
 
-  isAgentCreateEnabled(): boolean {
-    return this.config.policies.agentCreate?.enabled === true;
-  }
-
-  async authorizeAgentCreate(input: AgentCreateDecisionInput): Promise<DecisionAuthorization | null> {
-    const policyConfig = this.config.policies.agentCreate;
+  async authorizeAgentCreate(
+    input: AgentCreateDecisionInput,
+  ): Promise<DecisionAuthorization | null> {
+    const policyConfig = this.config.policies.createAgentTool;
     if (!policyConfig?.enabled) {
       return null;
     }
 
     return this.authorize({
       definition: AGENT_CREATE_DECISION,
-      policy: { definition: AGENT_CREATE_DECISION, config: policyConfig },
+      policy: policyConfig,
       operation: input.operation,
       state: input.state,
       context: input.context,
@@ -167,59 +191,76 @@ export class DecisionService {
   }
 
   consumeAgentCreatePermit(permit: DecisionPermit, operation: JsonValue): void {
-    const policyConfig = this.config.policies.agentCreate;
+    const policyConfig = this.config.policies.createAgentTool;
     if (!policyConfig?.enabled) {
       throw new Error("Agent-create decision policy is not enabled");
     }
-    const fingerprint = this.operationFingerprint(
-      AGENT_CREATE_DECISION,
-      policyConfig,
-      operation,
-    );
+    const fingerprint = this.operationFingerprint(AGENT_CREATE_DECISION, policyConfig, operation);
     this.permitIssuer.consume(permit, fingerprint);
   }
 
   private async authorize(input: {
     definition: DecisionDefinition;
-    policy: ResolvedPolicy;
+    policy: CreateAgentToolDecisionPolicyConfig;
     operation: JsonValue;
     state: DecisionEntry;
     context?: DecisionContext;
     signal: AbortSignal;
   }): Promise<DecisionAuthorization> {
-    const fingerprint = this.operationFingerprint(
+    if (input.signal.aborted) {
+      throw callerAbortError();
+    }
+    const fingerprint = this.decisionFingerprint(input.definition, input.policy, input.state);
+    const operationFingerprint = this.operationFingerprint(
       input.definition,
-      input.policy.config,
+      input.policy,
       input.operation,
     );
-    const cached = this.cache.get(fingerprint) ?? this.auditStore.get(fingerprint);
+    let cached = this.cache.get(fingerprint) ?? null;
+    if (!cached) {
+      try {
+        cached = this.auditStore.get(fingerprint);
+      } catch (error) {
+        this.logger.warn({ err: error, fingerprint }, "Failed to read decision audit record");
+        if (this.config.mode === "enforce") {
+          return this.failClosedAuthorization(fingerprint, input.policy.failureDisposition);
+        }
+      }
+    }
     if (cached) {
       this.cache.set(fingerprint, cached);
-      return this.authorizationFromRecord(cached, true);
+      return this.authorizationFromRecord(cached, operationFingerprint, true);
     }
 
     let pending = this.inFlight.get(fingerprint);
     if (!pending) {
-      pending = this.evaluate({
+      const created = this.evaluate({
         ...input,
+        signal: new AbortController().signal,
         fingerprint,
       });
-      this.inFlight.set(fingerprint, pending);
+      pending = created;
+      this.inFlight.set(fingerprint, created);
+      void created.then(
+        () => this.clearInFlight(fingerprint, created),
+        () => this.clearInFlight(fingerprint, created),
+      );
     }
 
-    try {
-      const record = await pending;
-      return this.authorizationFromRecord(record, false);
-    } finally {
-      if (this.inFlight.get(fingerprint) === pending) {
-        this.inFlight.delete(fingerprint);
-      }
+    const record = await awaitWithCallerAbort(pending, input.signal);
+    return this.authorizationFromRecord(record, operationFingerprint, false);
+  }
+
+  private clearInFlight(fingerprint: string, pending: Promise<DecisionAuditRecord>): boolean {
+    if (this.inFlight.get(fingerprint) !== pending) {
+      return false;
     }
+    return this.inFlight.delete(fingerprint);
   }
 
   private async evaluate(input: {
     definition: DecisionDefinition;
-    policy: ResolvedPolicy;
+    policy: CreateAgentToolDecisionPolicyConfig;
     operation: JsonValue;
     state: DecisionEntry;
     context?: DecisionContext;
@@ -228,12 +269,12 @@ export class DecisionService {
   }): Promise<DecisionAuditRecord> {
     const startedAt = this.now();
     const definitionHash = this.definitionHash(input.definition);
-    const policyHash = this.policyHash(input.definition, input.policy.config);
+    const policyHash = this.policyHash(input.definition, input.policy);
     const requestedModel = this.config.typesafe?.model ?? "jev-latest";
 
     let record: DecisionAuditRecord;
     if (!this.engine) {
-      const wouldDisposition = failureDisposition(input.policy.config.failureDisposition);
+      const wouldDisposition = failureDisposition(input.policy.failureDisposition);
       record = this.failureRecord({
         ...input,
         startedAt,
@@ -253,30 +294,61 @@ export class DecisionService {
           },
           { signal: input.signal },
         );
-        const wouldDisposition = input.definition.resolve(
-          result.answers,
-          input.policy.config.minimumConfidence,
-        );
-        record = {
-          fingerprint: input.fingerprint,
-          createdAt: new Date(startedAt).toISOString(),
-          definitionId: input.definition.id,
-          definitionVersion: input.definition.version,
-          definitionHash,
-          policyHash,
-          requestedModel,
-          model: result.model,
-          mode: this.config.mode,
-          status: "resolved",
-          wouldDisposition,
-          actualDisposition: this.config.mode === "shadow" ? ALLOW : wouldDisposition,
-          answers: result.answers,
-          usage: result.usage,
-          latencyMs: Math.max(0, this.now() - startedAt),
-          ...(input.context ? { context: input.context } : {}),
-        };
+        if (this.config.mode === "enforce" && result.model !== requestedModel) {
+          const disposition = failureDisposition(input.policy.failureDisposition);
+          record = {
+            fingerprint: input.fingerprint,
+            createdAt: new Date(startedAt).toISOString(),
+            definitionId: input.definition.id,
+            definitionVersion: input.definition.version,
+            definitionHash,
+            policyVersion: input.definition.policyVersion,
+            policyHash,
+            requestedModel,
+            model: result.model,
+            mode: this.config.mode,
+            status: "failed",
+            wouldDisposition: disposition,
+            actualDisposition: disposition,
+            usage: result.usage,
+            latencyMs: Math.max(0, this.now() - startedAt),
+            errorKind: "model_mismatch",
+            ...(input.context ? { context: input.context } : {}),
+          };
+        } else {
+          const wouldDisposition = input.definition.resolve(
+            result.answers,
+            input.policy.minimumConfidence,
+          );
+          record = {
+            fingerprint: input.fingerprint,
+            createdAt: new Date(startedAt).toISOString(),
+            definitionId: input.definition.id,
+            definitionVersion: input.definition.version,
+            definitionHash,
+            policyVersion: input.definition.policyVersion,
+            policyHash,
+            requestedModel,
+            model: result.model,
+            mode: this.config.mode,
+            status: "resolved",
+            wouldDisposition,
+            actualDisposition: this.config.mode === "shadow" ? ALLOW : wouldDisposition,
+            answers: result.answers,
+            usage: result.usage,
+            latencyMs: Math.max(0, this.now() - startedAt),
+            ...(input.context ? { context: input.context } : {}),
+          };
+        }
       } catch (error) {
-        const wouldDisposition = failureDisposition(input.policy.config.failureDisposition);
+        if (
+          input.signal.aborted &&
+          error instanceof TypeSafeDecisionError &&
+          error.kind === "aborted"
+        ) {
+          throw error;
+        }
+        const wouldDisposition = failureDisposition(input.policy.failureDisposition);
         record = this.failureRecord({
           ...input,
           startedAt,
@@ -289,7 +361,23 @@ export class DecisionService {
       }
     }
 
-    this.auditStore.put(record);
+    try {
+      this.auditStore.put(record);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, fingerprint: record.fingerprint },
+        "Failed to persist decision audit record",
+      );
+      if (this.config.mode === "enforce") {
+        record = {
+          ...record,
+          status: "failed",
+          wouldDisposition: failureDisposition(input.policy.failureDisposition),
+          actualDisposition: failureDisposition(input.policy.failureDisposition),
+          errorKind: "audit_write_failed",
+        };
+      }
+    }
     this.cache.set(record.fingerprint, record);
     this.logger.info(
       {
@@ -325,6 +413,7 @@ export class DecisionService {
       definitionId: input.definition.id,
       definitionVersion: input.definition.version,
       definitionHash: input.definitionHash,
+      policyVersion: input.definition.policyVersion,
       policyHash: input.policyHash,
       requestedModel: input.requestedModel,
       model: null,
@@ -338,13 +427,34 @@ export class DecisionService {
     };
   }
 
+  private failClosedAuthorization(
+    fingerprint: string,
+    disposition: DecisionFailureDisposition,
+  ): DecisionAuthorization {
+    const resolved = failureDisposition(disposition);
+    return {
+      fingerprint,
+      mode: "enforce",
+      actualDisposition: resolved,
+      wouldDisposition: resolved,
+      reused: false,
+      permit: null,
+    };
+  }
+
   private authorizationFromRecord(
     record: DecisionAuditRecord,
+    operationFingerprint: string,
     reused: boolean,
   ): DecisionAuthorization {
     const permit =
       record.actualDisposition.kind === "allow"
-        ? this.permitIssuer.issue(record.fingerprint)
+        ? this.permitIssuer.issue({
+            decisionFingerprint: record.fingerprint,
+            operationFingerprint,
+            model: record.model,
+            disposition: "allow",
+          })
         : null;
     return {
       fingerprint: record.fingerprint,
@@ -356,14 +466,20 @@ export class DecisionService {
     };
   }
 
+  private decisionFingerprint(
+    definition: DecisionDefinition,
+    policy: CreateAgentToolDecisionPolicyConfig,
+    state: DecisionEntry,
+  ): string {
+    return digest(this.policyHash(definition, policy) + "\nstate\n" + canonicalJson(state));
+  }
+
   private operationFingerprint(
     definition: DecisionDefinition,
-    policy: AgentCreateDecisionPolicyConfig,
+    policy: CreateAgentToolDecisionPolicyConfig,
     operation: JsonValue,
   ): string {
-    return digest(
-      this.policyHash(definition, policy) + "\n" + canonicalJson(operation),
-    );
+    return digest(this.policyHash(definition, policy) + "\n" + canonicalJson(operation));
   }
 
   private definitionHash(definition: DecisionDefinition): string {
@@ -374,10 +490,11 @@ export class DecisionService {
 
   private policyHash(
     definition: DecisionDefinition,
-    policy: AgentCreateDecisionPolicyConfig,
+    policy: CreateAgentToolDecisionPolicyConfig,
   ): string {
     const material: JsonValue = {
       definitionHash: this.definitionHash(definition),
+      policyVersion: definition.policyVersion,
       mode: this.config.mode,
       engine: "typesafe-jev",
       engineEnabled: this.config.typesafe?.enabled ?? false,

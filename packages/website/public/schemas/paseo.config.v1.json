@@ -359,6 +359,67 @@
           },
           "additionalProperties": false
         },
+        "decisions": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["shadow", "enforce"]
+            },
+            "typesafe": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "model": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "timeoutMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 120000
+                },
+                "maxConcurrency": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 32
+                }
+              },
+              "additionalProperties": false
+            },
+            "policies": {
+              "type": "object",
+              "properties": {
+                "createAgentTool": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "minimumConfidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "failureDisposition": {
+                      "type": "string",
+                      "enum": ["review", "deny"]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "features": {
           "type": "object",
           "properties": {

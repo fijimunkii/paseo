@@ -54,10 +54,7 @@ export interface ScoreDecisionAnswer {
   probabilities: Record<string, number>;
 }
 
-export type DecisionAnswer =
-  | NoulDecisionAnswer
-  | ChoiceDecisionAnswer
-  | ScoreDecisionAnswer;
+export type DecisionAnswer = NoulDecisionAnswer | ChoiceDecisionAnswer | ScoreDecisionAnswer;
 
 export interface DecisionResult {
   engine: string;
@@ -71,8 +68,5 @@ export interface DecisionResult {
 
 export interface DecisionEngine {
   readonly id: string;
-  evaluate(
-    request: DecisionRequest,
-    options: { signal: AbortSignal },
-  ): Promise<DecisionResult>;
+  evaluate(request: DecisionRequest, options: { signal: AbortSignal }): Promise<DecisionResult>;
 }

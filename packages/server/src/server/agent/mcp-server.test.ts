@@ -1301,6 +1301,79 @@ describe("create_agent MCP tool", () => {
     ).toBe(true);
   });
 
+  it("rejects passthrough create_agent fields before the decision engine is called", async () => {
+    const { agentManager, agentStorage, spies } = createTestDeps();
+    const ensureWorkspace = vi.fn(async () => "workspace-should-not-exist");
+    const authorizeAgentCreate = vi.fn();
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: ensureWorkspace,
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+
+    await expect(
+      registeredTool(server, "create_agent").handler({
+        title: "Unknown field",
+        provider: "codex/gpt-5.4",
+        initialPrompt: "Do work",
+        background: true,
+        arbitraryFingerprintSalt: "retry-me",
+      }),
+    ).rejects.toThrow();
+
+    expect(authorizeAgentCreate).not.toHaveBeenCalled();
+    expect(ensureWorkspace).not.toHaveBeenCalled();
+    expect(spies.agentManager.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("normalizes equivalent canonical and legacy create_agent syntax to one decision operation", async () => {
+    const { agentManager, agentStorage } = createTestDeps();
+    const authorizeAgentCreate = vi.fn().mockResolvedValue({
+      fingerprint: "e".repeat(64),
+      mode: "enforce",
+      actualDisposition: { kind: "deny" },
+      wouldDisposition: { kind: "deny" },
+      reused: false,
+      permit: null,
+    });
+    const server = await createAgentMcpServer({
+      agentManager,
+      agentStorage,
+      providerSnapshotManager: createOpenCodeManager().manager,
+      ensureWorkspaceForCreate: vi.fn(async () => "workspace-should-not-exist"),
+      decisionService: {
+        authorizeAgentCreate,
+        consumeAgentCreatePermit: vi.fn(),
+      },
+      logger,
+    });
+    const tool = registeredTool(server, "create_agent");
+    const common = {
+      title: "Equivalent request",
+      provider: "codex/gpt-5.4",
+      initialPrompt: "Do work",
+    };
+
+    await expect(tool.handler(common)).rejects.toThrow("Decision policy denied create_agent");
+    await expect(
+      tool.handler({
+        ...common,
+        cwd: process.cwd(),
+      }),
+    ).rejects.toThrow("Decision policy denied create_agent");
+
+    expect(authorizeAgentCreate).toHaveBeenCalledTimes(2);
+    const firstOperation = authorizeAgentCreate.mock.calls[0]?.[0]?.operation;
+    const secondOperation = authorizeAgentCreate.mock.calls[1]?.[0]?.operation;
+    expect(secondOperation).toEqual(firstOperation);
+  });
+
   it("blocks create_agent before workspace or agent side effects when decision policy denies", async () => {
     const { agentManager, agentStorage, spies } = createTestDeps();
     const ensureWorkspace = vi.fn(async () => "workspace-should-not-exist");

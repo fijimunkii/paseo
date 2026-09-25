@@ -32,11 +32,7 @@ export class TypeSafeDecisionError extends Error {
   readonly kind: TypeSafeDecisionErrorKind;
   readonly status: number | null;
 
-  constructor(
-    kind: TypeSafeDecisionErrorKind,
-    message: string,
-    options: { status?: number } = {},
-  ) {
+  constructor(kind: TypeSafeDecisionErrorKind, message: string, options: { status?: number } = {}) {
     super(message);
     this.name = "TypeSafeDecisionError";
     this.kind = kind;
@@ -93,7 +89,13 @@ function createRequestSignal(signal: AbortSignal, timeoutMs: number): RequestSig
 
 function normalizeBaseUrl(value: string): string {
   const url = new URL(value);
-  const isLocalhost = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+  const isLocalhost = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname);
+  if (url.username || url.password) {
+    throw new TypeSafeDecisionError(
+      "invalid_request",
+      "TypeSafe base URL must not contain embedded credentials",
+    );
+  }
   if (url.protocol !== "https:" && !isLocalhost) {
     throw new TypeSafeDecisionError(
       "invalid_request",
@@ -117,29 +119,11 @@ function assertRequest(request: DecisionRequest): void {
   }
 
   for (const [name, question] of questionEntries) {
-    if (!name.trim()) {
+    if (question.type === "score" && question.criteria.length < 2) {
       throw new TypeSafeDecisionError(
         "invalid_request",
-        "Decision question names must not be empty",
+        'Score question "' + name + '" must define at least 2 criteria',
       );
-    }
-    if (question.type === "choice") {
-      const choices = Object.keys(question.criteria);
-      if (choices.length === 0 || choices.length > 255) {
-        throw new TypeSafeDecisionError(
-          "invalid_request",
-          'Choice question "' + name + '" must define between 1 and 255 criteria',
-        );
-      }
-    }
-    if (question.type === "score") {
-      const levels = question.criteria.length;
-      if (levels < 2 || levels > 10) {
-        throw new TypeSafeDecisionError(
-          "invalid_request",
-          'Score question "' + name + '" must define between 2 and 10 criteria',
-        );
-      }
     }
   }
 }
@@ -294,7 +278,10 @@ function throwTransportError(input: {
       "TypeSafe request timed out after " + input.timeoutMs + "ms",
     );
   }
-  throw new TypeSafeDecisionError("network", "TypeSafe request failed before a response was received");
+  throw new TypeSafeDecisionError(
+    "network",
+    "TypeSafe request failed before a response was received",
+  );
 }
 
 export function createTypeSafeDecisionEngine(
@@ -313,10 +300,7 @@ export function createTypeSafeDecisionEngine(
     throw new TypeSafeDecisionError("invalid_request", "TypeSafe timeout must be positive");
   }
   if (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0) {
-    throw new TypeSafeDecisionError(
-      "invalid_request",
-      "TypeSafe max concurrency must be positive",
-    );
+    throw new TypeSafeDecisionError("invalid_request", "TypeSafe max concurrency must be positive");
   }
 
   const limit = pLimit(maxConcurrency);
@@ -348,6 +332,7 @@ export function createTypeSafeDecisionEngine(
               ...(body === undefined ? {} : { "content-type": "application/json" }),
             },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            redirect: "error",
             signal: requestSignal.signal,
           });
         } catch {
@@ -374,12 +359,7 @@ export function createTypeSafeDecisionEngine(
 
     async evaluate(requestInput, requestOptions) {
       assertRequest(requestInput);
-      const payload = await request(
-        "POST",
-        "/v1/systemone",
-        requestOptions.signal,
-        requestInput,
-      );
+      const payload = await request("POST", "/v1/systemone", requestOptions.signal, requestInput);
       return {
         engine: "typesafe-jev",
         ...parseDecisionResult(requestInput, payload),

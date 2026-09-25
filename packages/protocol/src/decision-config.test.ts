@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
-  AgentCreateDecisionPolicyConfigSchema,
+  CreateAgentToolDecisionPolicyConfigSchema,
   DecisionConfigSchema,
   TypeSafeDecisionConfigSchema,
 } from "./decision-config.js";
@@ -22,7 +22,7 @@ describe("decision config", () => {
       mode: "shadow",
       policies: {},
     });
-    expect(AgentCreateDecisionPolicyConfigSchema.parse({})).toEqual({
+    expect(CreateAgentToolDecisionPolicyConfigSchema.parse({})).toEqual({
       enabled: false,
       minimumConfidence: 0.9,
       failureDisposition: "review",
@@ -36,12 +36,12 @@ describe("decision config", () => {
         typesafe: {
           enabled: true,
           baseUrl: "https://typesafe.example.test",
-          model: "jev-1.13.0",
+          model: "jev-pinned-test",
           timeoutMs: 5_000,
           maxConcurrency: 2,
         },
         policies: {
-          agentCreate: {
+          createAgentTool: {
             enabled: true,
             minimumConfidence: 0.95,
             failureDisposition: "deny",
@@ -53,12 +53,12 @@ describe("decision config", () => {
       typesafe: {
         enabled: true,
         baseUrl: "https://typesafe.example.test",
-        model: "jev-1.13.0",
+        model: "jev-pinned-test",
         timeoutMs: 5_000,
         maxConcurrency: 2,
       },
       policies: {
-        agentCreate: {
+        createAgentTool: {
           enabled: true,
           minimumConfidence: 0.95,
           failureDisposition: "deny",

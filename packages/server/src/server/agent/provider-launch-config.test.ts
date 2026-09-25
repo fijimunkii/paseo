@@ -246,6 +246,25 @@ describe("createProviderEnv", () => {
     expect(env.PATH).toBe("/custom/path");
   });
 
+  test("strips the daemon-only TypeSafe key even from provider overrides", () => {
+    const base = {
+      PATH: "/usr/bin",
+      TYPESAFE_API_KEY: "daemon-secret",
+    };
+    const runtime: ProviderRuntimeSettings = {
+      env: {
+        TYPESAFE_API_KEY: "provider-attempted-override",
+        FOO: "bar",
+      },
+    };
+
+    const env = createProviderEnv({ baseEnv: base, runtimeSettings: runtime });
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.FOO).toBe("bar");
+    expect(env.TYPESAFE_API_KEY).toBeUndefined();
+  });
+
   test("strips parent Claude Code session env vars without removing SDK child flags", () => {
     const base = {
       PATH: "/usr/bin",
