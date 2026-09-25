@@ -17,6 +17,7 @@ import {
   type ManagedOrchestrationLoopResult,
 } from "../decisions/orchestration-loop.js";
 import {
+  recordOrchestrationTaskApplication,
   routeOrchestrationTask,
   type OrchestrationTaskRoutingResult,
 } from "../decisions/orchestration-routing.js";
@@ -196,6 +197,15 @@ export async function routeManagedAgentTask(input: {
   if (routing.appliedLane) {
     await input.agentManager.applyAgentExecutionLane(input.agentId, routing.appliedLane);
   }
+  recordOrchestrationTaskApplication({
+    service: input.decisionService,
+    outcome: routing.outcome,
+    requestedProvider: agent.provider,
+    requestedModel,
+    requestedThinkingOptionId:
+      agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
+    applied: routing.mode === "shadow" ? "manual" : (routing.appliedLane?.laneId ?? null),
+  });
   return routing;
 }
 
