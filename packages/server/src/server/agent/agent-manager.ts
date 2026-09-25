@@ -1929,6 +1929,29 @@ export class AgentManager {
     return notice;
   }
 
+  async applyAgentExecutionLane(
+    agentId: string,
+    lane: { provider: string; model: string; thinkingOptionId?: string },
+  ): Promise<void> {
+    const agent = this.requireSessionAgent(agentId);
+    if (agent.provider !== lane.provider) {
+      throw new Error(
+        `Cannot apply execution lane for provider '${lane.provider}' to agent provider '${agent.provider}'`,
+      );
+    }
+    if (!agent.session.setModel) {
+      throw new Error(`Provider '${agent.provider}' does not support runtime model changes`);
+    }
+    if (lane.thinkingOptionId && !agent.session.setThinkingOption) {
+      throw new Error(`Provider '${agent.provider}' does not support runtime thinking changes`);
+    }
+
+    await this.setAgentModel(agentId, lane.model);
+    if (lane.thinkingOptionId) {
+      await this.setAgentThinkingOption(agentId, lane.thinkingOptionId);
+    }
+  }
+
   async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
     const agent = this.requireSessionAgent(agentId);
     const normalizedModelId =
