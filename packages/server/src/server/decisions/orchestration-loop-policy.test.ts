@@ -26,12 +26,12 @@ function evidence(
 ): OrchestrationEvidence {
   return {
     requiresHumanReview: false,
+    changedPaths: [],
     turn: { status: turnStatus },
     verificationStatus,
     checks: [],
     toolFailureSignatures: [],
     git: null,
-    assistantResult: null,
   };
 }
 
