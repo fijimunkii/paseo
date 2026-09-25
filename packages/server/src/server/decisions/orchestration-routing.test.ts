@@ -155,8 +155,10 @@ describe("routeOrchestrationTask", () => {
     const mismatchedPolicy: OrchestrationDecisionPolicyConfig = {
       ...policy,
       lanes: {
-        ...policy.lanes!,
+        small: { provider: "codex", model: "fast", thinkingOptionId: "low" },
+        medium: { provider: "codex", model: "fast", thinkingOptionId: "medium" },
         high: { provider: "claude", model: "fast", thinkingOptionId: "high" },
+        escalated: { provider: "codex", model: "strong", thinkingOptionId: "high" },
       },
     };
 
