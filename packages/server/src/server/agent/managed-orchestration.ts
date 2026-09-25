@@ -100,7 +100,7 @@ async function collectTurnEvidence(input: {
 }
 
 export async function routeManagedAgentTask(input: {
-  decisionService: ManagedAgentDecisionService | null | undefined;
+  decisionService: Partial<ManagedAgentDecisionService> | null | undefined;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   providerSnapshotManager: ProviderSnapshotManager;
@@ -145,8 +145,18 @@ export async function routeManagedAgentTask(input: {
   return routing;
 }
 
+function hasCheckpointService(
+  service: Partial<ManagedAgentDecisionService> | null | undefined,
+): service is ManagedAgentDecisionService {
+  return (
+    typeof service?.getDecisionMode === "function" &&
+    typeof service.getOrchestrationPolicy === "function" &&
+    typeof service.assessOrchestrationCheckpoint === "function"
+  );
+}
+
 export async function runManagedAgentLoop(input: {
-  decisionService: ManagedAgentDecisionService | null | undefined;
+  decisionService: Partial<ManagedAgentDecisionService> | null | undefined;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
   providerSnapshotManager: ProviderSnapshotManager;
@@ -159,8 +169,11 @@ export async function runManagedAgentLoop(input: {
   signal: AbortSignal;
 }): Promise<ManagedAgentLoopResult | null> {
   const service = input.decisionService;
-  const policy = service?.getOrchestrationPolicy() ?? null;
-  if (!service || !policy) {
+  if (!hasCheckpointService(service)) {
+    return null;
+  }
+  const policy = service.getOrchestrationPolicy();
+  if (!policy) {
     return null;
   }
 
