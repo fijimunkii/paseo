@@ -109,6 +109,21 @@ export async function routeManagedAgentTask(input: {
   routing?: OrchestrationRoutingMode;
   signal: AbortSignal;
 }): Promise<OrchestrationTaskRoutingResult> {
+  const policy = input.decisionService?.getOrchestrationPolicy?.() ?? null;
+  const effectiveRouting = input.routing ?? policy?.defaultRouting ?? "manual";
+  if (
+    effectiveRouting !== "managed" ||
+    typeof input.decisionService?.assessOrchestrationTask !== "function"
+  ) {
+    return {
+      routing: "manual",
+      outcome: null,
+      recommendedLane: null,
+      appliedLane: null,
+      recommendationError: null,
+    };
+  }
+
   await ensureAgentLoaded(input.agentManager, input.agentStorage, input.agentId);
   const agent = input.agentManager.getAgent(input.agentId);
   if (!agent) {
