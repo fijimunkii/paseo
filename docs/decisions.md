@@ -60,10 +60,11 @@ the complete validated operation is separately hashed for exact permit binding.
 
 
 Orchestration task assessment sends only the task/title plus the requested provider, model, and
-thinking option. Checkpoint assessment sends bounded evidence selected by Paseo: turn status,
-recognized verification results, deduplicated failure signatures, git dirty/diff-count facts, and a
-truncated assistant result. Paseo does not send raw shell output, raw diffs, arbitrary timeline
-entries, or repository contents to Jev. In enforce mode, deterministic facts are handled before Jev:
+thinking option. Checkpoint assessment sends bounded evidence selected by Paseo: turn status, recognized
+verification results, deduplicated failure signatures, bounded changed-file paths, and git
+dirty/diff-count facts. Worker-authored completion prose is deliberately excluded from the
+checkpoint identity so rephrasing a final answer cannot force a fresh Jev sample. Paseo does not
+send raw shell output, raw diffs, arbitrary timeline entries, or repository contents to Jev. In enforce mode, deterministic facts are handled before Jev:
 for example, a failed check triggers recovery and missing verification triggers `VERIFY` without a
 checkpoint model call.
 
@@ -211,7 +212,10 @@ Hard rules run first:
 - permission/attention or an unresolved running state => `REVIEW`
 - failed turn or failed deterministic check => bounded recovery; never `COMPLETE`
 - no recognized verification => `VERIFY`
-- retry/escalation budgets are enforced in code
+- implementation retry/escalation budgets are enforced in code; verification-only turns do not
+  consume the implementation-attempt budget
+- only direct, unmasked verification commands count as deterministic evidence; shell chaining,
+  wrappers, redirection, or constructs such as `npm test || true` are not trusted
 - `COMPLETE` is accepted only after deterministic verification has passed
 
 Only after those deterministic facts clear does enforce mode ask Jev for residual semantic judgment.
