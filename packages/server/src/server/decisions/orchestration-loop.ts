@@ -3,6 +3,7 @@ import type { OrchestrationDecisionPolicyConfig } from "@getpaseo/protocol/decis
 import type { DecisionEntry } from "./engine.js";
 import type { OrchestrationEvidence } from "./orchestration-evidence.js";
 import {
+  resolveDeterministicOrchestrationDirective,
   resolveOrchestrationDirective,
   type OrchestrationDirective,
   type OrchestrationLoopState,
@@ -16,7 +17,7 @@ import type { DecisionOutcome, DecisionService } from "./service.js";
 
 type CheckpointDecisionService = Pick<
   DecisionService,
-  "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
+  "getDecisionMode" | "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
 >;
 
 export interface ManagedOrchestrationLoopResult {
@@ -148,6 +149,40 @@ export async function runManagedOrchestrationLoop(input: {
       throw input.signal.reason instanceof Error
         ? input.signal.reason
         : new Error("Managed orchestration was canceled");
+    }
+
+    const deterministic =
+      input.service.getDecisionMode() === "enforce"
+        ? resolveDeterministicOrchestrationDirective({
+            policy,
+            evidence,
+            state,
+          })
+        : null;
+    if (deterministic === "complete" || deterministic === "review") {
+      return {
+        directive: deterministic,
+        attempts: state.attempts,
+        escalations: state.escalations,
+        evidence,
+        outcome: null,
+        shadow: false,
+      };
+    }
+    if (deterministic) {
+      if (deterministic === "escalate") {
+        const lane = await resolveEscalatedLane({
+          policy,
+          providerCatalog: input.providerCatalog,
+          provider: input.provider,
+          cwd: input.cwd,
+        });
+        await input.callbacks.applyLane(lane);
+        state.escalations += 1;
+      }
+      evidence = await input.callbacks.runContinuation(continuationPrompt(deterministic));
+      state.attempts += 1;
+      continue;
     }
 
     const outcome = await assessCheckpoint({
