@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 
 import type { AgentTimelineItem } from "../agent/agent-sdk-types.js";
 
@@ -153,12 +154,30 @@ function collectToolFailureSignatures(timeline: readonly AgentTimelineItem[]): s
   return [...signatures].sort();
 }
 
+function boundedChangedPath(filePath: string, workspaceRoot: string | undefined): string {
+  const isAbsolute = path.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
+  if (!isAbsolute) {
+    return filePath.replaceAll("\\", "/").replace(/^\.\//u, "");
+  }
+
+  if (workspaceRoot) {
+    const relative = path.relative(workspaceRoot, filePath);
+    const outsideWorkspace =
+      relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative);
+    if (!outsideWorkspace) {
+      return relative.replaceAll(path.sep, "/");
+    }
+  }
+  return path.basename(filePath);
+}
+
 export function buildOrchestrationEvidence(input: {
   timeline: readonly AgentTimelineItem[];
   turnStatus: "completed" | "failed" | "canceled";
   errorKind?: string;
   requiresHumanReview?: boolean;
   changedPaths?: readonly string[];
+  workspaceRoot?: string;
   git?: {
     isGit: boolean;
     isDirty: boolean | null;
@@ -171,11 +190,14 @@ export function buildOrchestrationEvidence(input: {
       return [];
     }
     if (item.detail.type === "edit" || item.detail.type === "write") {
-      return [item.detail.filePath];
+      return [boundedChangedPath(item.detail.filePath, input.workspaceRoot)];
     }
     return [];
   });
-  const changedPaths = [...new Set([...(input.changedPaths ?? []), ...timelineChangedPaths])]
+  const configuredChangedPaths = (input.changedPaths ?? []).map((filePath) =>
+    boundedChangedPath(filePath, input.workspaceRoot),
+  );
+  const changedPaths = [...new Set([...configuredChangedPaths, ...timelineChangedPaths])]
     .sort()
     .slice(0, 100);
 
