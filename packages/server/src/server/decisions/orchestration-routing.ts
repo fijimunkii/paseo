@@ -36,12 +36,16 @@ export interface OrchestrationTaskRoutingResult {
 }
 
 type OrchestrationDecisionService = Partial<
-  Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationTask">
+  Pick<
+    DecisionService,
+    "getOrchestrationPolicy" | "assessOrchestrationTask" | "recordOrchestrationApplication"
+  >
 >;
 type ActiveOrchestrationDecisionService = Pick<
   DecisionService,
   "getOrchestrationPolicy" | "assessOrchestrationTask"
->;
+> &
+  Partial<Pick<DecisionService, "recordOrchestrationApplication">>;
 
 interface OrchestrationTaskRoutingInput {
   service: OrchestrationDecisionService | null | undefined;
@@ -114,6 +118,35 @@ function laneIdFromDisposition(outcome: DecisionOutcome): OrchestrationLaneId | 
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Orchestration lane resolution failed";
+}
+
+function dispositionLabel(outcome: DecisionOutcome): string {
+  return outcome.wouldDisposition.kind === "route"
+    ? outcome.wouldDisposition.target
+    : outcome.wouldDisposition.kind;
+}
+
+function recordTaskApplication(input: {
+  service: ActiveOrchestrationDecisionService;
+  outcome: DecisionOutcome;
+  requestedProvider: string;
+  requestedModel: string;
+  requestedThinkingOptionId?: string;
+  applied: string | null;
+}): void {
+  input.service.recordOrchestrationApplication?.(input.outcome.fingerprint, {
+    kind: "task",
+    requested: {
+      provider: input.requestedProvider,
+      model: input.requestedModel,
+      ...(input.requestedThinkingOptionId
+        ? { thinkingOptionId: input.requestedThinkingOptionId }
+        : {}),
+    },
+    recommended: dispositionLabel(input.outcome),
+    applied: input.applied,
+    shadow: input.outcome.mode === "shadow",
+  });
 }
 
 async function resolveLaneRecommendation(input: {
@@ -228,6 +261,14 @@ export async function routeOrchestrationTask(
     cwd: input.cwd,
   });
   if (outcome.mode === "shadow") {
+    recordTaskApplication({
+      service: active.service,
+      outcome,
+      requestedProvider: input.requestedProvider,
+      requestedModel: input.requestedModel,
+      requestedThinkingOptionId: input.requestedThinkingOptionId,
+      applied: "manual",
+    });
     return {
       routing: active.routing,
       outcome,
@@ -243,6 +284,14 @@ export async function routeOrchestrationTask(
     providerCatalog: input.providerCatalog,
     requestedProvider: input.requestedProvider,
     cwd: input.cwd,
+  });
+  recordTaskApplication({
+    service: active.service,
+    outcome,
+    requestedProvider: input.requestedProvider,
+    requestedModel: input.requestedModel,
+    requestedThinkingOptionId: input.requestedThinkingOptionId,
+    applied: appliedLane.laneId,
   });
   return {
     routing: active.routing,
