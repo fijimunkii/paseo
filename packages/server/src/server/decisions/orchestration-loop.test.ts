@@ -43,10 +43,7 @@ function evidence(
   };
 }
 
-function outcome(
-  target: string,
-  mode: "shadow" | "enforce" = "enforce",
-): DecisionOutcome {
+function outcome(target: string, mode: "shadow" | "enforce" = "enforce"): DecisionOutcome {
   return {
     fingerprint: target.padEnd(64, "a").slice(0, 64),
     mode,

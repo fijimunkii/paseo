@@ -46,7 +46,9 @@ function turnStatus(result: WaitForAgentResult): OrchestrationEvidence["turn"]["
 }
 
 function requiresHumanReview(result: WaitForAgentResult): boolean {
-  return result.permission !== null || result.status === "running" || result.status === "initializing";
+  return (
+    result.permission !== null || result.status === "running" || result.status === "initializing"
+  );
 }
 
 async function readGitEvidence(
@@ -152,8 +154,7 @@ export async function routeManagedAgentTask(input: {
     task: input.task,
     requestedProvider: agent.provider,
     requestedModel,
-    requestedThinkingOptionId:
-      agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
+    requestedThinkingOptionId: agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
     requestedRouting: input.routing,
     cwd: agent.cwd,
     agentId: input.agentId,

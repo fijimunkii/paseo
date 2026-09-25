@@ -100,12 +100,7 @@ export function resolveOrchestrationDirective(input: {
     }
     return "complete";
   }
-  if (
-    target === "continue" ||
-    target === "retry" ||
-    target === "verify" ||
-    target === "escalate"
-  ) {
+  if (target === "continue" || target === "retry" || target === "verify" || target === "escalate") {
     return boundedRequestedDirective(target, input.policy, input.state);
   }
   return "review";

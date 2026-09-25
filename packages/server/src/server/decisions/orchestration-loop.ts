@@ -67,7 +67,9 @@ function previewOutcome(outcome: DecisionOutcome): DecisionOutcome {
   };
 }
 
-function continuationPrompt(directive: Exclude<OrchestrationDirective, "complete" | "review">): string {
+function continuationPrompt(
+  directive: Exclude<OrchestrationDirective, "complete" | "review">,
+): string {
   switch (directive) {
     case "continue":
       return "<paseo-system>Continue the requested task. Inspect the current implementation and remaining requirements before making further changes.</paseo-system>";

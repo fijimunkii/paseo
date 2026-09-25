@@ -25,11 +25,7 @@ function shell(
 describe("buildOrchestrationEvidence", () => {
   test("derives verification from observed deterministic tool results", () => {
     const evidence = buildOrchestrationEvidence({
-      timeline: [
-        shell("npm test", 0),
-        shell("npm run typecheck", 0),
-        shell("npm run lint", 0),
-      ],
+      timeline: [shell("npm test", 0), shell("npm run typecheck", 0), shell("npm run lint", 0)],
       turnStatus: "completed",
       assistantResult: "Implemented and verified.",
       git: {

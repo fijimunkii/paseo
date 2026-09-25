@@ -4097,15 +4097,12 @@ describe("send_agent_prompt MCP tool", () => {
       logger,
     });
 
-    const response = await invokeToolWithParsedInput(
-      registeredTool(server, "send_agent_prompt"),
-      {
-        agentId: "child-agent",
-        prompt: "Implement the feature",
-        orchestration: "managed",
-        background: false,
-      },
-    );
+    const response = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+      agentId: "child-agent",
+      prompt: "Implement the feature",
+      orchestration: "managed",
+      background: false,
+    });
 
     expect(assessOrchestrationTask).toHaveBeenCalledOnce();
     expect(assessOrchestrationCheckpoint).toHaveBeenCalledOnce();
@@ -4215,15 +4212,12 @@ describe("send_agent_prompt MCP tool", () => {
       logger,
     });
 
-    const response = await invokeToolWithParsedInput(
-      registeredTool(server, "send_agent_prompt"),
-      {
-        agentId: "child-agent",
-        prompt: "Implement the feature",
-        orchestration: "managed",
-        background: false,
-      },
-    );
+    const response = await invokeToolWithParsedInput(registeredTool(server, "send_agent_prompt"), {
+      agentId: "child-agent",
+      prompt: "Implement the feature",
+      orchestration: "managed",
+      background: false,
+    });
 
     expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledTimes(1);
     expect(spies.agentManager.applyAgentExecutionLane).toHaveBeenCalledWith(

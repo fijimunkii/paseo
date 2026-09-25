@@ -45,7 +45,9 @@ export async function resolveOrchestrationLane(input: {
   });
 
   if (!provider.enabled) {
-    throw new Error(`Orchestration lane '${input.laneId}' targets disabled provider '${lane.provider}'`);
+    throw new Error(
+      `Orchestration lane '${input.laneId}' targets disabled provider '${lane.provider}'`,
+    );
   }
   if (provider.status !== "ready") {
     throw new Error(
