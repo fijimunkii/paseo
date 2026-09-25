@@ -67,6 +67,12 @@ function previewOutcome(outcome: DecisionOutcome): DecisionOutcome {
   };
 }
 
+function countsAsImplementationAttempt(
+  directive: Exclude<OrchestrationDirective, "complete" | "review">,
+): boolean {
+  return directive !== "verify";
+}
+
 function continuationPrompt(
   directive: Exclude<OrchestrationDirective, "complete" | "review">,
 ): string {
@@ -183,7 +189,9 @@ export async function runManagedOrchestrationLoop(input: {
         state.escalations += 1;
       }
       evidence = await input.callbacks.runContinuation(continuationPrompt(deterministic));
-      state.attempts += 1;
+      if (countsAsImplementationAttempt(deterministic)) {
+        state.attempts += 1;
+      }
       continue;
     }
 
@@ -235,7 +243,9 @@ export async function runManagedOrchestrationLoop(input: {
     }
 
     evidence = await input.callbacks.runContinuation(continuationPrompt(directive));
-    state.attempts += 1;
+    if (countsAsImplementationAttempt(directive)) {
+      state.attempts += 1;
+    }
   }
 
   return {
