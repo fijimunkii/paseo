@@ -50,12 +50,11 @@ function routeTarget(outcome: DecisionOutcome | null): string | null {
   return outcome.actualDisposition.target;
 }
 
-export function resolveOrchestrationDirective(input: {
+export function resolveDeterministicOrchestrationDirective(input: {
   policy: OrchestrationDecisionPolicyConfig;
   evidence: OrchestrationEvidence;
-  outcome: DecisionOutcome | null;
   state: OrchestrationLoopState;
-}): OrchestrationDirective {
+}): OrchestrationDirective | null {
   if (input.evidence.requiresHumanReview) {
     return "review";
   }
@@ -64,6 +63,26 @@ export function resolveOrchestrationDirective(input: {
     input.evidence.verificationStatus === "failed"
   ) {
     return boundedRecoveryDirective(input.policy, input.state);
+  }
+  if (input.evidence.verificationStatus === "not_run") {
+    return boundedRequestedDirective("verify", input.policy, input.state);
+  }
+  return null;
+}
+
+export function resolveOrchestrationDirective(input: {
+  policy: OrchestrationDecisionPolicyConfig;
+  evidence: OrchestrationEvidence;
+  outcome: DecisionOutcome | null;
+  state: OrchestrationLoopState;
+}): OrchestrationDirective {
+  const deterministic = resolveDeterministicOrchestrationDirective({
+    policy: input.policy,
+    evidence: input.evidence,
+    state: input.state,
+  });
+  if (deterministic) {
+    return deterministic;
   }
 
   if (
