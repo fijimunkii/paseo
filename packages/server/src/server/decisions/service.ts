@@ -5,6 +5,7 @@ import type {
   CreateAgentToolDecisionPolicyConfig,
   DecisionConfig,
   DecisionFailureDisposition,
+  OrchestrationDecisionPolicyConfig,
   TypeSafeDecisionConfig,
 } from "@getpaseo/protocol/decision-config";
 
@@ -17,6 +18,8 @@ import {
 import { DecisionPermitIssuer, type DecisionPermit } from "./permit.js";
 import {
   AGENT_CREATE_DECISION,
+  ORCHESTRATION_CHECKPOINT_DECISION,
+  ORCHESTRATION_TASK_DECISION,
   type DecisionDefinition,
   type DecisionDisposition,
 } from "./policy.js";
@@ -42,13 +45,29 @@ export interface AgentCreateDecisionInput {
   signal: AbortSignal;
 }
 
-export interface DecisionAuthorization {
+export interface DecisionOutcome {
   fingerprint: string;
   mode: "shadow" | "enforce";
+  model: string | null;
   actualDisposition: DecisionDisposition;
   wouldDisposition: DecisionDisposition;
   reused: boolean;
+}
+
+export interface DecisionAuthorization extends DecisionOutcome {
   permit: DecisionPermit | null;
+}
+
+export interface OrchestrationDecisionInput {
+  state: DecisionEntry;
+  context?: DecisionContext;
+  signal: AbortSignal;
+}
+
+interface RuntimeDecisionPolicy {
+  minimumConfidence: number;
+  failureDisposition: DecisionFailureDisposition;
+  fingerprintMaterial: JsonValue;
 }
 
 interface DecisionServiceOptions {
@@ -180,10 +199,57 @@ export class DecisionService {
       return null;
     }
 
-    return this.authorize({
+    const policy = this.createAgentPolicy(policyConfig);
+    const outcome = await this.decide({
       definition: AGENT_CREATE_DECISION,
-      policy: policyConfig,
-      operation: input.operation,
+      policy,
+      state: input.state,
+      context: input.context,
+      signal: input.signal,
+    });
+    const operationFingerprint = this.operationFingerprint(
+      AGENT_CREATE_DECISION,
+      policy,
+      input.operation,
+    );
+    const permit =
+      outcome.actualDisposition.kind === "allow"
+        ? this.permitIssuer.issue({
+            decisionFingerprint: outcome.fingerprint,
+            operationFingerprint,
+            model: outcome.model,
+            disposition: "allow",
+          })
+        : null;
+    return { ...outcome, permit };
+  }
+
+  async assessOrchestrationTask(
+    input: OrchestrationDecisionInput,
+  ): Promise<DecisionOutcome | null> {
+    const policyConfig = this.config.policies.orchestration;
+    if (!policyConfig?.enabled) {
+      return null;
+    }
+    return this.decide({
+      definition: ORCHESTRATION_TASK_DECISION,
+      policy: this.orchestrationPolicy(policyConfig),
+      state: input.state,
+      context: input.context,
+      signal: input.signal,
+    });
+  }
+
+  async assessOrchestrationCheckpoint(
+    input: OrchestrationDecisionInput,
+  ): Promise<DecisionOutcome | null> {
+    const policyConfig = this.config.policies.orchestration;
+    if (!policyConfig?.enabled) {
+      return null;
+    }
+    return this.decide({
+      definition: ORCHESTRATION_CHECKPOINT_DECISION,
+      policy: this.orchestrationPolicy(policyConfig),
       state: input.state,
       context: input.context,
       signal: input.signal,
@@ -195,27 +261,25 @@ export class DecisionService {
     if (!policyConfig?.enabled) {
       throw new Error("Agent-create decision policy is not enabled");
     }
-    const fingerprint = this.operationFingerprint(AGENT_CREATE_DECISION, policyConfig, operation);
+    const fingerprint = this.operationFingerprint(
+      AGENT_CREATE_DECISION,
+      this.createAgentPolicy(policyConfig),
+      operation,
+    );
     this.permitIssuer.consume(permit, fingerprint);
   }
 
-  private async authorize(input: {
+  private async decide(input: {
     definition: DecisionDefinition;
-    policy: CreateAgentToolDecisionPolicyConfig;
-    operation: JsonValue;
+    policy: RuntimeDecisionPolicy;
     state: DecisionEntry;
     context?: DecisionContext;
     signal: AbortSignal;
-  }): Promise<DecisionAuthorization> {
+  }): Promise<DecisionOutcome> {
     if (input.signal.aborted) {
       throw callerAbortError();
     }
     const fingerprint = this.decisionFingerprint(input.definition, input.policy, input.state);
-    const operationFingerprint = this.operationFingerprint(
-      input.definition,
-      input.policy,
-      input.operation,
-    );
     let cached = this.cache.get(fingerprint) ?? null;
     if (!cached) {
       try {
@@ -223,13 +287,13 @@ export class DecisionService {
       } catch (error) {
         this.logger.warn({ err: error, fingerprint }, "Failed to read decision audit record");
         if (this.config.mode === "enforce") {
-          return this.failClosedAuthorization(fingerprint, input.policy.failureDisposition);
+          return this.failClosedOutcome(fingerprint, input.policy.failureDisposition);
         }
       }
     }
     if (cached) {
       this.cache.set(fingerprint, cached);
-      return this.authorizationFromRecord(cached, operationFingerprint, true);
+      return this.outcomeFromRecord(cached, true);
     }
 
     let pending = this.inFlight.get(fingerprint);
@@ -248,7 +312,7 @@ export class DecisionService {
     }
 
     const record = await awaitWithCallerAbort(pending, input.signal);
-    return this.authorizationFromRecord(record, operationFingerprint, false);
+    return this.outcomeFromRecord(record, false);
   }
 
   private clearInFlight(fingerprint: string, pending: Promise<DecisionAuditRecord>): boolean {
@@ -260,7 +324,7 @@ export class DecisionService {
 
   private async evaluate(input: {
     definition: DecisionDefinition;
-    policy: CreateAgentToolDecisionPolicyConfig;
+    policy: RuntimeDecisionPolicy;
     operation: JsonValue;
     state: DecisionEntry;
     context?: DecisionContext;
@@ -427,48 +491,35 @@ export class DecisionService {
     };
   }
 
-  private failClosedAuthorization(
+  private failClosedOutcome(
     fingerprint: string,
     disposition: DecisionFailureDisposition,
-  ): DecisionAuthorization {
+  ): DecisionOutcome {
     const resolved = failureDisposition(disposition);
     return {
       fingerprint,
       mode: "enforce",
+      model: null,
       actualDisposition: resolved,
       wouldDisposition: resolved,
       reused: false,
-      permit: null,
     };
   }
 
-  private authorizationFromRecord(
-    record: DecisionAuditRecord,
-    operationFingerprint: string,
-    reused: boolean,
-  ): DecisionAuthorization {
-    const permit =
-      record.actualDisposition.kind === "allow"
-        ? this.permitIssuer.issue({
-            decisionFingerprint: record.fingerprint,
-            operationFingerprint,
-            model: record.model,
-            disposition: "allow",
-          })
-        : null;
+  private outcomeFromRecord(record: DecisionAuditRecord, reused: boolean): DecisionOutcome {
     return {
       fingerprint: record.fingerprint,
       mode: record.mode,
+      model: record.model,
       actualDisposition: record.actualDisposition,
       wouldDisposition: record.wouldDisposition,
       reused,
-      permit,
     };
   }
 
   private decisionFingerprint(
     definition: DecisionDefinition,
-    policy: CreateAgentToolDecisionPolicyConfig,
+    policy: RuntimeDecisionPolicy,
     state: DecisionEntry,
   ): string {
     return digest(this.policyHash(definition, policy) + "\nstate\n" + canonicalJson(state));
@@ -476,7 +527,7 @@ export class DecisionService {
 
   private operationFingerprint(
     definition: DecisionDefinition,
-    policy: CreateAgentToolDecisionPolicyConfig,
+    policy: RuntimeDecisionPolicy,
     operation: JsonValue,
   ): string {
     return digest(this.policyHash(definition, policy) + "\n" + canonicalJson(operation));
@@ -490,7 +541,7 @@ export class DecisionService {
 
   private policyHash(
     definition: DecisionDefinition,
-    policy: CreateAgentToolDecisionPolicyConfig,
+    policy: RuntimeDecisionPolicy,
   ): string {
     const material: JsonValue = {
       definitionHash: this.definitionHash(definition),
@@ -501,11 +552,64 @@ export class DecisionService {
       engineAvailable: this.engine !== null,
       baseUrl: this.config.typesafe?.baseUrl ?? "https://api.typesafe.ai",
       requestedModel: this.config.typesafe?.model ?? "jev-latest",
-      minimumConfidence: policy.minimumConfidence,
-      failureDisposition: policy.failureDisposition,
+      policy: policy.fingerprintMaterial,
     };
     return digest(canonicalJson(material));
   }
+
+
+  private createAgentPolicy(
+    policy: CreateAgentToolDecisionPolicyConfig,
+  ): RuntimeDecisionPolicy {
+    return {
+      minimumConfidence: policy.minimumConfidence,
+      failureDisposition: policy.failureDisposition,
+      fingerprintMaterial: {
+        enabled: policy.enabled,
+        minimumConfidence: policy.minimumConfidence,
+        failureDisposition: policy.failureDisposition,
+      },
+    };
+  }
+
+  private orchestrationPolicy(
+    policy: OrchestrationDecisionPolicyConfig,
+  ): RuntimeDecisionPolicy {
+    const lanes = policy.lanes
+      ? {
+          small: this.lanePolicyMaterial(policy.lanes.small),
+          medium: this.lanePolicyMaterial(policy.lanes.medium),
+          high: this.lanePolicyMaterial(policy.lanes.high),
+          escalated: this.lanePolicyMaterial(policy.lanes.escalated),
+        }
+      : null;
+    return {
+      minimumConfidence: policy.minimumConfidence,
+      failureDisposition: policy.failureDisposition,
+      fingerprintMaterial: {
+        enabled: policy.enabled,
+        minimumConfidence: policy.minimumConfidence,
+        failureDisposition: policy.failureDisposition,
+        defaultRouting: policy.defaultRouting,
+        maxAttempts: policy.maxAttempts,
+        maxEscalations: policy.maxEscalations,
+        lanes,
+      },
+    };
+  }
+
+  private lanePolicyMaterial(lane: {
+    provider: string;
+    model: string;
+    thinkingOptionId?: string;
+  }): JsonValue {
+    return {
+      provider: lane.provider,
+      model: lane.model,
+      ...(lane.thinkingOptionId ? { thinkingOptionId: lane.thinkingOptionId } : {}),
+    };
+  }
+
 }
 
 export function createDecisionService(options: {
