@@ -1536,9 +1536,34 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
 
       try {
         if (!createdInBackground && initialPromptStarted) {
-          const result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
+          let result = await waitForAgentWithTimeout(agentManager, snapshot.id, {
+            signal,
             waitForActive: true,
           });
+          let orchestrationGuidance: string | undefined;
+          if (routedCreate.routingMode === "managed") {
+            const managed = await runManagedAgentLoop({
+              decisionService: options.decisionService,
+              agentManager,
+              agentStorage,
+              providerSnapshotManager,
+              workspaceGitService: options.workspaceGitService,
+              logger: childLogger,
+              agentId: snapshot.id,
+              task: parsedArgs.initialPrompt,
+              initialTimelineStart: 0,
+              initialWaitResult: result,
+              signal,
+            });
+            if (managed) {
+              result = managed.waitResult;
+              orchestrationGuidance = managed.loop.shadow
+                ? `Jev shadow checkpoint recommends ${managed.loop.directive}; execution was unchanged.`
+                : managed.loop.directive === "review"
+                  ? "Paseo managed orchestration requires human review before continuing."
+                  : undefined;
+            }
+          }
 
           const liveSnapshot = agentManager.getAgent(snapshot.id) ?? snapshot;
           const responseData = {
@@ -1551,6 +1576,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
             availableModes: liveSnapshot.availableModes,
             lastMessage: result.lastMessage,
             permission: sanitizePermissionRequest(result.permission),
+            ...(orchestrationGuidance ? { guidance: orchestrationGuidance } : {}),
           };
           const validJson = ensureValidJson(responseData);
 
@@ -1684,6 +1710,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     input: ParsedCreateAgentToolArgs,
     signal: AbortSignal,
   ): Promise<{
+    routingMode: "manual" | "managed";
     providerModel: string;
     thinkingOptionId: string | undefined;
     decisionRequest: JsonValue;
@@ -1710,6 +1737,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       ? routing.appliedLane.thinkingOptionId
       : input.parsedArgs.settings?.thinkingOptionId;
     return {
+      routingMode: routing.routing,
       providerModel,
       thinkingOptionId,
       decisionRequest: applyCreateAgentRoutingToDecisionRequest(
