@@ -2196,6 +2196,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         agentManager,
         agentStorage,
         providerSnapshotManager,
+        logger: childLogger,
         agentId,
         task: prompt,
         routing: orchestration,
