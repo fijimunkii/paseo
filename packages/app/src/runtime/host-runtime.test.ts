@@ -10,7 +10,7 @@ import type {
 import type { ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
-import type { HostConnection, HostProfile } from "@/types/host-connection";
+import { defaultLifecycle, type HostConnection, type HostProfile } from "@/types/host-connection";
 import { defaultHostAppearance } from "@/hosts/appearance";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
@@ -383,7 +383,7 @@ function makeHost(input?: Partial<HostProfile>): HostProfile {
     serverId: input?.serverId ?? "srv_test",
     label: input?.label ?? "test host",
     appearance: input?.appearance ?? defaultHostAppearance(),
-    lifecycle: input?.lifecycle ?? {},
+    lifecycle: input?.lifecycle ?? defaultLifecycle(),
     connections: input?.connections ?? [direct, relay],
     preferredConnectionId: input?.preferredConnectionId ?? direct.id,
     createdAt: input?.createdAt ?? new Date(0).toISOString(),

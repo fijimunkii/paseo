@@ -16,9 +16,16 @@ import {
   defaultHostAppearance,
   HostAppearanceSchema,
 } from "@/hosts/appearance";
+import {
+  defaultHostLifecycle,
+  normalizeStoredHostLifecycle,
+  StoredHostLifecycleSchema,
+  type HostLifecycle,
+} from "@/managed-hosts/lifecycle";
 import { z } from "zod";
 
 export { DirectTcpHostConnectionSchema, type DirectTcpHostConnection };
+export type { HostLifecycle } from "@/managed-hosts/lifecycle";
 
 export interface DirectSocketHostConnection {
   id: string;
@@ -55,8 +62,6 @@ export type HostConnection =
   | RemoteSshHostConnection
   | RelayHostConnection;
 
-export type HostLifecycle = Record<string, never>;
-
 export interface HostProfile {
   serverId: string;
   label: string;
@@ -69,7 +74,7 @@ export interface HostProfile {
 }
 
 export function defaultLifecycle(): HostLifecycle {
-  return {};
+  return defaultHostLifecycle();
 }
 
 export function normalizeHostLabel(value: string | null | undefined, serverId: string): string {
@@ -166,6 +171,13 @@ function hostLifecycleEquals(left: HostLifecycle, right: HostLifecycle): boolean
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function resolveHostLifecycle(
+  lifecycle: HostLifecycle | undefined,
+  fallback = defaultLifecycle(),
+): HostLifecycle {
+  return lifecycle ?? fallback;
+}
+
 function upsertHostConnectionById(
   connections: HostConnection[],
   connection: HostConnection,
@@ -190,6 +202,7 @@ export function upsertHostConnectionInProfiles(input: {
   profiles: HostProfile[];
   serverId: string;
   label?: string;
+  lifecycle?: HostLifecycle;
   connection: HostConnection;
   now?: string;
 }): HostProfile[] {
@@ -217,7 +230,7 @@ export function upsertHostConnectionInProfiles(input: {
       serverId,
       label: derivedLabel,
       appearance: defaultHostAppearance(),
-      lifecycle: defaultLifecycle(),
+      lifecycle: resolveHostLifecycle(input.lifecycle),
       connections: [input.connection],
       preferredConnectionId: input.connection.id,
       createdAt: now,
@@ -232,7 +245,7 @@ export function upsertHostConnectionInProfiles(input: {
     matchedProfiles.flatMap((daemon) => daemon.connections),
     input.connection,
   );
-  const nextLifecycle = prev.lifecycle;
+  const nextLifecycle = resolveHostLifecycle(input.lifecycle, prev.lifecycle);
   const nextLabel = prev.label === prev.serverId ? derivedLabel : prev.label;
   const nextPreferredConnectionId =
     prev.preferredConnectionId &&
@@ -388,7 +401,7 @@ const StoredHostProfileSchema = z.strictObject({
   serverId: z.string().trim().min(1),
   label: z.string().optional(),
   appearance: HostAppearanceSchema.optional(),
-  lifecycle: z.strictObject({}).optional(),
+  lifecycle: StoredHostLifecycleSchema.optional(),
   connections: z.array(StoredHostConnectionSchema).min(1),
   preferredConnectionId: z.string().nullable().optional(),
   createdAt: z.string().datetime({ offset: true }).optional(),
@@ -396,6 +409,15 @@ const StoredHostProfileSchema = z.strictObject({
 });
 export const StoredHostRegistrySchema = z.array(StoredHostProfileSchema);
 type StoredHostConnection = z.infer<typeof StoredHostConnectionSchema>;
+
+export function serializeHostRegistryForStorage(hosts: HostProfile[]): unknown[] {
+  return hosts.map((host) => ({
+    ...host,
+    // Keep ordinary host records readable by the previous app version, whose
+    // lifecycle schema accepted only the legacy empty object.
+    lifecycle: host.lifecycle.kind === "unmanaged" ? {} : host.lifecycle,
+  }));
+}
 
 function normalizeStoredConnection(connection: StoredHostConnection): HostConnection | null {
   if (connection.type === "directTcp") {
@@ -480,7 +502,7 @@ export function normalizeStoredHostProfile(entry: unknown): HostProfile | null {
     serverId,
     label,
     appearance: record.appearance ?? defaultHostAppearance(),
-    lifecycle: defaultLifecycle(),
+    lifecycle: normalizeStoredHostLifecycle(record.lifecycle),
     connections,
     preferredConnectionId,
     createdAt: record.createdAt ?? now,

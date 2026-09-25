@@ -14,6 +14,7 @@ import {
   upsertHostConnectionInProfiles,
   registryHasConnection,
   StoredHostRegistrySchema,
+  defaultLifecycle,
   type HostConnection,
   type HostProfile,
 } from "@/types/host-connection";
@@ -1740,7 +1741,7 @@ export class HostRuntimeStore {
       serverId: "",
       label: input.label ?? input.connection.id,
       appearance: defaultHostAppearance(),
-      lifecycle: {},
+      lifecycle: defaultLifecycle(),
       connections: [input.connection],
       preferredConnectionId: input.connection.id,
       createdAt: new Date(0).toISOString(),
