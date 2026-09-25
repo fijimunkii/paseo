@@ -59,9 +59,13 @@ function outcome(
 
 function service(
   outcomes: DecisionOutcome[],
-): Pick<DecisionService, "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"> {
+): Pick<
+  DecisionService,
+  "getDecisionMode" | "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
+> {
   let index = 0;
   return {
+    getDecisionMode: () => outcomes[0]?.mode ?? "enforce",
     getOrchestrationPolicy: () => policy,
     assessOrchestrationCheckpoint: vi.fn(async () => outcomes[index++] ?? outcomes.at(-1) ?? null),
   };
@@ -186,8 +190,9 @@ describe("runManagedOrchestrationLoop", () => {
     };
     const checkpointService: Pick<
       DecisionService,
-      "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
+      "getDecisionMode" | "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
     > = {
+      getDecisionMode: () => "enforce",
       getOrchestrationPolicy: () => failingPolicy,
       assessOrchestrationCheckpoint: vi.fn(async () => outcome("retry")),
     };
