@@ -1,0 +1,35 @@
+name: Jev Quality Probe
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-probe:
+    if: ${{ github.head_ref == 'feat/jev-decision-foundation' }}
+    runs-on: ubuntu-latest
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Emit oxlint diagnostics
+        run: |
+          echo "===== OXLINT JSON BEGIN ====="
+          npx oxlint --format json || true
+          echo "===== OXLINT JSON END ====="
+
+      - name: Emit oxfmt patch
+        run: |
+          npx oxfmt .
+          echo "===== OXFMT PATCH BEGIN ====="
+          git diff --no-ext-diff -- .
+          echo "===== OXFMT PATCH END ====="
