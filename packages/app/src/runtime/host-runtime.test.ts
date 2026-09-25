@@ -12,6 +12,7 @@ import type { SessionOutboundMessage } from "@getpaseo/protocol/messages";
 import type { AgentPermissionRequest } from "@getpaseo/protocol/agent-types";
 import { defaultLifecycle, type HostConnection, type HostProfile } from "@/types/host-connection";
 import { defaultHostAppearance } from "@/hosts/appearance";
+import type { AxManagedHostBackend } from "@/managed-hosts/ax";
 import { useSessionStore, type Agent } from "@/stores/session-store";
 import { normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { isAgentArchiving, setAgentArchiving } from "@/hooks/use-archive-agent";
@@ -410,6 +411,60 @@ function encodeOfferUrl(payload: unknown): string {
     .replace(/\//g, "_")
     .replace(/=+$/g, "");
   return `https://app.paseo.sh/#offer=${encoded}`;
+}
+
+class FakeAxManagedHostBackend implements AxManagedHostBackend {
+  provisionCalls: Parameters<AxManagedHostBackend["provision"]>[0][] = [];
+  inspectCalls: Parameters<AxManagedHostBackend["inspect"]>[0][] = [];
+  suspendCalls: Parameters<AxManagedHostBackend["suspend"]>[0][] = [];
+  resumeCalls: Parameters<AxManagedHostBackend["resume"]>[0][] = [];
+  destroyCalls: Parameters<AxManagedHostBackend["destroy"]>[0][] = [];
+  phase = "Running";
+
+  async provision(
+    spec: Parameters<AxManagedHostBackend["provision"]>[0],
+  ): ReturnType<AxManagedHostBackend["provision"]> {
+    this.provisionCalls.push(spec);
+    return {
+      pairingUrl: encodeOfferUrl(makeOffer({ serverId: "srv_ax_managed" })),
+      lifecycle: {
+        kind: "ax",
+        kubeContext: spec.kubeContext,
+        namespace: spec.namespace,
+        atespace: spec.atespace,
+        taskName: spec.taskName,
+        workspaceName: `${spec.taskName}-ws-test`,
+        gatewayName: `${spec.taskName}-gw-test`,
+      },
+    };
+  }
+
+  async inspect(
+    target: Parameters<AxManagedHostBackend["inspect"]>[0],
+  ): ReturnType<AxManagedHostBackend["inspect"]> {
+    this.inspectCalls.push(target);
+    return { phase: this.phase };
+  }
+
+  async suspend(
+    target: Parameters<AxManagedHostBackend["suspend"]>[0],
+  ): ReturnType<AxManagedHostBackend["suspend"]> {
+    this.suspendCalls.push(target);
+    this.phase = "Suspended";
+  }
+
+  async resume(
+    target: Parameters<AxManagedHostBackend["resume"]>[0],
+  ): ReturnType<AxManagedHostBackend["resume"]> {
+    this.resumeCalls.push(target);
+    this.phase = "Running";
+  }
+
+  async destroy(
+    target: Parameters<AxManagedHostBackend["destroy"]>[0],
+  ): ReturnType<AxManagedHostBackend["destroy"]> {
+    this.destroyCalls.push(target);
+  }
 }
 
 function makeDeps(
@@ -1640,7 +1695,7 @@ describe("HostRuntimeStore", () => {
       expect(store.getSnapshot(hostB.serverId)?.connectionStatus).toBe("online");
 
       unbind();
-      store.syncHosts([]);
+      (store as unknown as { setHostsAndSync: (hosts: HostProfile[]) => void }).setHostsAndSync([]);
     },
   );
 
@@ -3462,6 +3517,211 @@ describe("HostRuntimeStore", () => {
     expect(store.getHosts()[0]?.label).toBe("mbp");
 
     store.syncHosts([]);
+  });
+
+  it("provisions an AX host and stores relay plus lifecycle identity together", async () => {
+    const managedHostBackend = new FakeAxManagedHostBackend();
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async ({ host }) => ({
+          client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: host.label ?? null,
+        }),
+        getClientId: async () => "cid_ax_managed",
+      },
+      managedHostBackend,
+    });
+
+    const profile = await store.provisionAxHost({
+      kubeContext: "dev-cluster",
+      namespace: "ax-system",
+      atespace: "default",
+      taskName: "paseo-host-1",
+      image: "ghcr.io/fijimunkii/paseo-ax:latest",
+      egressHosts: ["relay.paseo.sh"],
+      label: "AX dev",
+    });
+
+    expect(managedHostBackend.provisionCalls).toHaveLength(1);
+    expect(profile.serverId).toBe("srv_ax_managed");
+    expect(profile.label).toBe("AX dev");
+    expect(profile.lifecycle).toEqual({
+      kind: "ax",
+      kubeContext: "dev-cluster",
+      namespace: "ax-system",
+      atespace: "default",
+      taskName: "paseo-host-1",
+      workspaceName: "paseo-host-1-ws-test",
+      gatewayName: "paseo-host-1-gw-test",
+    });
+    expect(profile.connections).toEqual([
+      {
+        id: "relay:relay.paseo.sh:443",
+        type: "relay",
+        relayEndpoint: "relay.paseo.sh:443",
+        useTls: false,
+        daemonPublicKeyB64: "pk_test_offer",
+      },
+    ]);
+
+    store.syncHosts([]);
+  });
+
+  it("refuses to suspend an AX host while a foreground agent is running", async () => {
+    const managedHostBackend = new FakeAxManagedHostBackend();
+    const fakeClient = new FakeDaemonClient();
+    fakeClient.setConnectionState({ status: "connected" });
+    const running = makeFetchAgentsEntry({
+      id: "agent-running",
+      cwd: "/workspace/repo",
+      updatedAt: "2026-09-24T12:00:00.000Z",
+    });
+    fakeClient.fetchAgentsResponses.push(
+      makeFetchAgentsPayload({
+        entries: [{ ...running, agent: { ...running.agent, status: "running" } }],
+      }),
+    );
+    const host = makeHost({
+      serverId: "srv_ax_running",
+      lifecycle: {
+        kind: "ax",
+        kubeContext: "dev-cluster",
+        namespace: "ax-system",
+        atespace: "default",
+        taskName: "paseo-host-1",
+        workspaceName: "paseo-host-1-workspace",
+        gatewayName: "paseo-host-1-gateway",
+      },
+      connections: [
+        {
+          id: "relay:relay.paseo.sh:443",
+          type: "relay",
+          relayEndpoint: "relay.paseo.sh:443",
+          daemonPublicKeyB64: "pk_test",
+        },
+      ],
+      preferredConnectionId: "relay:relay.paseo.sh:443",
+    });
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => fakeClient as unknown as DaemonClient,
+        connectToDaemon: async () => ({
+          client: fakeClient as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: host.label,
+        }),
+        getClientId: async () => "cid_ax_running",
+      },
+      managedHostBackend,
+    });
+
+    (
+      store as unknown as {
+        setHostsAndSync: (
+          hosts: HostProfile[],
+          options?: {
+            initialConnectionByServerId?: Map<
+              string,
+              { connectionId: string; existingClient: DaemonClient }
+            >;
+          },
+        ) => void;
+      }
+    ).setHostsAndSync([host], {
+      initialConnectionByServerId: new Map([
+        [
+          host.serverId,
+          {
+            connectionId: "relay:relay.paseo.sh:443",
+            existingClient: fakeClient as unknown as DaemonClient,
+          },
+        ],
+      ]),
+    });
+    await waitForHostOnline(store, host.serverId);
+
+    await expect(store.suspendManagedHost(host.serverId)).rejects.toThrow(
+      "Stop active agent work before suspending this AX host.",
+    );
+    expect(managedHostBackend.suspendCalls).toEqual([]);
+
+    store.syncHosts([]);
+  });
+
+  it("suspends, resumes, inspects, and destroys an idle AX host through its managed backend", async () => {
+    const managedHostBackend = new FakeAxManagedHostBackend();
+    const fakeClient = new FakeDaemonClient();
+    fakeClient.setConnectionState({ status: "connected" });
+    const host = makeHost({
+      serverId: "srv_ax_idle",
+      lifecycle: {
+        kind: "ax",
+        kubeContext: "dev-cluster",
+        namespace: "ax-system",
+        atespace: "default",
+        taskName: "paseo-host-1",
+        workspaceName: "paseo-host-1-workspace",
+        gatewayName: "paseo-host-1-gateway",
+      },
+      connections: [
+        {
+          id: "relay:relay.paseo.sh:443",
+          type: "relay",
+          relayEndpoint: "relay.paseo.sh:443",
+          daemonPublicKeyB64: "pk_test",
+        },
+      ],
+      preferredConnectionId: "relay:relay.paseo.sh:443",
+    });
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => fakeClient as unknown as DaemonClient,
+        connectToDaemon: async () => ({
+          client: fakeClient as unknown as DaemonClient,
+          serverId: host.serverId,
+          hostname: host.label,
+        }),
+        getClientId: async () => "cid_ax_idle",
+      },
+      managedHostBackend,
+      revokePushNotifications: async () => undefined,
+    });
+
+    (
+      store as unknown as {
+        setHostsAndSync: (
+          hosts: HostProfile[],
+          options?: {
+            initialConnectionByServerId?: Map<
+              string,
+              { connectionId: string; existingClient: DaemonClient }
+            >;
+          },
+        ) => void;
+      }
+    ).setHostsAndSync([host], {
+      initialConnectionByServerId: new Map([
+        [
+          host.serverId,
+          {
+            connectionId: "relay:relay.paseo.sh:443",
+            existingClient: fakeClient as unknown as DaemonClient,
+          },
+        ],
+      ]),
+    });
+    await waitForHostOnline(store, host.serverId);
+
+    await expect(store.inspectManagedHost(host.serverId)).resolves.toEqual({ phase: "Running" });
+    await store.suspendManagedHost(host.serverId);
+    expect(managedHostBackend.suspendCalls).toHaveLength(1);
+    await store.resumeManagedHost(host.serverId);
+    expect(managedHostBackend.resumeCalls).toHaveLength(1);
+    await store.destroyManagedHost(host.serverId);
+    expect(managedHostBackend.destroyCalls).toHaveLength(1);
+    expect(store.getHosts()).toEqual([]);
   });
 
   it("uses the advertised hostname when adding a relay host from a pairing offer", async () => {

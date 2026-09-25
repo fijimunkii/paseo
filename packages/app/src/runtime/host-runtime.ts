@@ -13,6 +13,7 @@ import {
   normalizeStoredHostProfile,
   upsertHostConnectionInProfiles,
   registryHasConnection,
+  serializeHostRegistryForStorage,
   StoredHostRegistrySchema,
   defaultLifecycle,
   type HostConnection,
@@ -28,6 +29,11 @@ import {
 } from "@/utils/daemon-endpoints";
 import { resolveAppVersion } from "@/utils/app-version";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
+import type {
+  AxManagedHostLifecycle,
+  AxManagedHostProvisionSpec,
+} from "@getpaseo/protocol/managed-hosts-ax";
+import { desktopAxManagedHostBackend, type AxManagedHostBackend } from "@/managed-hosts/ax";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
 import { isWeb } from "@/constants/platform";
 import { connectToDaemon } from "@/utils/test-daemon-connection";
@@ -1391,23 +1397,27 @@ export class HostRuntimeStore {
   private queuedAgentDrainInFlight = new Set<string>();
   private directorySyncByServer = new Map<string, DirectorySync>();
   private nextCancellationRequestId = 0;
+  private readonly managedHostOperations = new Set<string>();
   private timelineReplicaByServer = new Map<string, TimelineReplica>();
   private configuredOverrideBootstrapInFlight: Promise<void> | null = null;
   private bootPromise: Promise<void> | null = null;
   private storage: HostRuntimeStorage;
   private replicaCache: ReplicaCache;
   private readonly revokePushNotifications: typeof revokePushNotifications;
+  private readonly managedHostBackend: AxManagedHostBackend;
 
   constructor(input?: {
     deps?: HostRuntimeControllerDeps;
     storage?: HostRuntimeStorage;
     replicaRowStore?: ReplicaRowStore;
     revokePushNotifications?: typeof revokePushNotifications;
+    managedHostBackend?: AxManagedHostBackend;
   }) {
     this.deps = input?.deps ?? createDefaultDeps();
     this.storage = input?.storage ?? AsyncStorage;
     this.replicaCache = new ReplicaCache(input?.replicaRowStore ?? createReplicaRowStore());
     this.revokePushNotifications = input?.revokePushNotifications ?? revokePushNotifications;
+    this.managedHostBackend = input?.managedHostBackend ?? desktopAxManagedHostBackend;
   }
 
   // --- Host registry ---
@@ -1799,6 +1809,7 @@ export class HostRuntimeStore {
     useTls?: boolean;
     daemonPublicKeyB64: string;
     label?: string;
+    lifecycle?: HostProfile["lifecycle"];
   }): Promise<HostProfile> {
     const relayEndpoint = normalizeHostPort(input.relayEndpoint);
     const useTls = input.useTls ?? false;
@@ -1810,6 +1821,7 @@ export class HostRuntimeStore {
     return this.upsertHostConnection({
       serverId: input.serverId,
       label: input.label,
+      lifecycle: input.lifecycle,
       connection: {
         id: useTls ? `relay:wss:${relayEndpoint}` : `relay:${relayEndpoint}`,
         type: "relay",
@@ -1820,7 +1832,11 @@ export class HostRuntimeStore {
     });
   }
 
-  async upsertConnectionFromOffer(offer: ConnectionOffer, label?: string): Promise<HostProfile> {
+  async upsertConnectionFromOffer(
+    offer: ConnectionOffer,
+    label?: string,
+    lifecycle?: HostProfile["lifecycle"],
+  ): Promise<HostProfile> {
     // COMPAT(oldRelayOfferTls): added in v0.1.73, remove after 2026-11-10.
     const useTls = offer.relay.useTls ?? shouldUseTlsForDefaultHostedRelay(offer.relay.endpoint);
     return this.upsertRelayConnection({
@@ -1829,12 +1845,14 @@ export class HostRuntimeStore {
       useTls,
       daemonPublicKeyB64: offer.daemonPublicKeyB64,
       label,
+      lifecycle,
     });
   }
 
   async upsertConnectionFromOfferUrl(
     offerUrlOrFragment: string,
     label?: string,
+    lifecycle?: HostProfile["lifecycle"],
   ): Promise<HostProfile> {
     const marker = "#offer=";
     const idx = offerUrlOrFragment.indexOf(marker);
@@ -1847,7 +1865,56 @@ export class HostRuntimeStore {
     }
     const payload = decodeOfferFragmentPayload(encoded);
     const offer = ConnectionOfferSchema.parse(payload);
-    return this.upsertConnectionFromOffer(offer, label);
+    return this.upsertConnectionFromOffer(offer, label, lifecycle);
+  }
+
+  async provisionAxHost(
+    input: AxManagedHostProvisionSpec & { label?: string },
+  ): Promise<HostProfile> {
+    const { label, ...spec } = input;
+    const result = await this.managedHostBackend.provision(spec);
+    return this.upsertConnectionFromOfferUrl(result.pairingUrl, label, result.lifecycle);
+  }
+
+  async inspectManagedHost(serverId: string): Promise<{ phase: string }> {
+    let status: { phase: string } | null = null;
+    await this.runManagedHostOperation(serverId, async (lifecycle) => {
+      status = await this.managedHostBackend.inspect(lifecycle);
+    });
+    if (!status) throw new Error("Managed host inspection did not return a status.");
+    return status;
+  }
+
+  async suspendManagedHost(serverId: string): Promise<void> {
+    await this.runManagedHostOperation(serverId, async (lifecycle) => {
+      const client = this.getClient(serverId);
+      if (!client) {
+        throw new Error("Connect to the managed host before suspending it.");
+      }
+      const active = await client.fetchAgents({
+        scope: "active",
+        filter: { statuses: ["initializing", "running"] },
+        page: { limit: 1 },
+      });
+      if (active.entries.length > 0) {
+        throw new Error("Stop active agent work before suspending this AX host.");
+      }
+      await this.managedHostBackend.suspend(lifecycle);
+    });
+  }
+
+  async resumeManagedHost(serverId: string): Promise<void> {
+    await this.runManagedHostOperation(serverId, async (lifecycle) => {
+      await this.managedHostBackend.resume(lifecycle);
+      this.controllers.get(serverId)?.ensureConnected({ verify: true });
+    });
+  }
+
+  async destroyManagedHost(serverId: string): Promise<void> {
+    await this.runManagedHostOperation(serverId, async (lifecycle) => {
+      await this.managedHostBackend.destroy(lifecycle);
+      await this.removeHost(serverId);
+    });
   }
 
   async upsertConnectionFromListen(input: {
@@ -1869,6 +1936,26 @@ export class HostRuntimeStore {
       label: input.hostname ?? undefined,
       connection,
     });
+  }
+
+  private async runManagedHostOperation(
+    serverId: string,
+    operation: (lifecycle: AxManagedHostLifecycle) => Promise<void>,
+  ): Promise<void> {
+    if (this.managedHostOperations.has(serverId)) {
+      throw new Error("A managed-host lifecycle operation is already in progress.");
+    }
+    const host = this.hosts.find((candidate) => candidate.serverId === serverId);
+    if (!host) throw new Error(`Host ${serverId} was not found`);
+    if (host.lifecycle.kind !== "ax") {
+      throw new Error("This host is not managed by Agent Executor.");
+    }
+    this.managedHostOperations.add(serverId);
+    try {
+      await operation(host.lifecycle);
+    } finally {
+      this.managedHostOperations.delete(serverId);
+    }
   }
 
   private async updateHost(
@@ -1964,6 +2051,7 @@ export class HostRuntimeStore {
   private async upsertHostConnection(input: {
     serverId: string;
     label?: string;
+    lifecycle?: HostProfile["lifecycle"];
     connection: HostConnection;
     existingClient?: DaemonClient;
   }): Promise<HostProfile> {
@@ -1972,6 +2060,7 @@ export class HostRuntimeStore {
       profiles: this.hosts,
       serverId: input.serverId,
       label: input.label,
+      lifecycle: input.lifecycle,
       connection: input.connection,
       now,
     });
@@ -2013,7 +2102,10 @@ export class HostRuntimeStore {
   }
 
   private async persistHosts(hosts = this.hosts): Promise<void> {
-    await this.storage.setItem(REGISTRY_STORAGE_KEY, JSON.stringify(hosts));
+    await this.storage.setItem(
+      REGISTRY_STORAGE_KEY,
+      JSON.stringify(serializeHostRegistryForStorage(hosts)),
+    );
   }
 
   private emitHostList(): void {
@@ -2606,12 +2698,23 @@ export interface HostMutations {
     useTls?: boolean;
     daemonPublicKeyB64: string;
     label?: string;
+    lifecycle?: HostProfile["lifecycle"];
   }) => Promise<HostProfile>;
-  upsertConnectionFromOffer: (offer: ConnectionOffer, label?: string) => Promise<HostProfile>;
+  upsertConnectionFromOffer: (
+    offer: ConnectionOffer,
+    label?: string,
+    lifecycle?: HostProfile["lifecycle"],
+  ) => Promise<HostProfile>;
   upsertConnectionFromOfferUrl: (
     offerUrlOrFragment: string,
     label?: string,
+    lifecycle?: HostProfile["lifecycle"],
   ) => Promise<HostProfile>;
+  provisionAxHost: (input: AxManagedHostProvisionSpec & { label?: string }) => Promise<HostProfile>;
+  inspectManagedHost: (serverId: string) => Promise<{ phase: string }>;
+  suspendManagedHost: (serverId: string) => Promise<void>;
+  resumeManagedHost: (serverId: string) => Promise<void>;
+  destroyManagedHost: (serverId: string) => Promise<void>;
   renameHost: (serverId: string, label: string) => Promise<void>;
   setHostColor: (serverId: string, color: HostColor) => Promise<void>;
   setHostBadgeDisplay: (serverId: string, badgeDisplay: HostBadgeDisplay) => Promise<void>;
@@ -2627,8 +2730,15 @@ export function useHostMutations(): HostMutations {
       probeAndUpsertDirectConnection: (input) => store.probeAndUpsertDirectConnection(input),
       probeAndUpsertRemoteSshConnection: (input) => store.probeAndUpsertRemoteSshConnection(input),
       upsertRelayConnection: (input) => store.upsertRelayConnection(input),
-      upsertConnectionFromOffer: (offer, label) => store.upsertConnectionFromOffer(offer, label),
-      upsertConnectionFromOfferUrl: (url, label) => store.upsertConnectionFromOfferUrl(url, label),
+      upsertConnectionFromOffer: (offer, label, lifecycle) =>
+        store.upsertConnectionFromOffer(offer, label, lifecycle),
+      upsertConnectionFromOfferUrl: (url, label, lifecycle) =>
+        store.upsertConnectionFromOfferUrl(url, label, lifecycle),
+      provisionAxHost: (input) => store.provisionAxHost(input),
+      inspectManagedHost: (serverId) => store.inspectManagedHost(serverId),
+      suspendManagedHost: (serverId) => store.suspendManagedHost(serverId),
+      resumeManagedHost: (serverId) => store.resumeManagedHost(serverId),
+      destroyManagedHost: (serverId) => store.destroyManagedHost(serverId),
       renameHost: (serverId, label) => store.renameHost(serverId, label),
       setHostColor: (serverId, color) => store.setHostColor(serverId, color),
       setHostBadgeDisplay: (serverId, badgeDisplay) =>

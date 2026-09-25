@@ -76,6 +76,7 @@ import { ScreenHeader } from "@/components/headers/screen-header";
 import { AddHostMethodModal } from "@/components/add-host-method-modal";
 import { AddHostModal } from "@/components/add-host-modal";
 import { AddRemoteSshHostModal } from "@/components/add-remote-ssh-host-modal";
+import { AddAxHostModal } from "@/components/add-ax-host-modal";
 import { PairLinkModal } from "@/components/pair-link-modal";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { EditorSection } from "@/screens/settings/editor-section";
@@ -1223,6 +1224,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const [isAddHostMethodVisible, setIsAddHostMethodVisible] = useState(false);
   const [isDirectHostVisible, setIsDirectHostVisible] = useState(false);
   const [isRemoteSshVisible, setIsRemoteSshVisible] = useState(false);
+  const [isAxHostVisible, setIsAxHostVisible] = useState(false);
   const [isPasteLinkVisible, setIsPasteLinkVisible] = useState(false);
   const [isPlaybackTestRunning, setIsPlaybackTestRunning] = useState(false);
   const [playbackTestResult, setPlaybackTestResult] = useState<string | null>(null);
@@ -1333,12 +1335,14 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
     setIsAddHostMethodVisible(false);
     setIsDirectHostVisible(false);
     setIsRemoteSshVisible(false);
+    setIsAxHostVisible(false);
     setIsPasteLinkVisible(false);
   }, []);
 
   const goBackToAddConnectionMethods = useCallback(() => {
     setIsDirectHostVisible(false);
     setIsRemoteSshVisible(false);
+    setIsAxHostVisible(false);
     setIsPasteLinkVisible(false);
     setIsAddHostMethodVisible(true);
   }, []);
@@ -1363,6 +1367,11 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
   const handleSelectRemoteSsh = useCallback(() => {
     setIsAddHostMethodVisible(false);
     setIsRemoteSshVisible(true);
+  }, []);
+
+  const handleSelectAgentExecutor = useCallback(() => {
+    setIsAddHostMethodVisible(false);
+    setIsAxHostVisible(true);
   }, []);
 
   const handleSelectPasteLink = useCallback(() => {
@@ -1597,6 +1606,7 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
         onClose={closeAddConnectionFlow}
         onDirectConnection={handleSelectDirectConnection}
         onRemoteSsh={handleSelectRemoteSsh}
+        onAgentExecutor={handleSelectAgentExecutor}
         onPasteLink={handleSelectPasteLink}
         onScanQr={handleScanQr}
       />
@@ -1608,6 +1618,12 @@ export default function SettingsScreen({ view, openAddHostIntent = null }: Setti
       />
       <AddRemoteSshHostModal
         visible={isRemoteSshVisible}
+        onClose={closeAddConnectionFlow}
+        onCancel={goBackToAddConnectionMethods}
+        onSaved={handleHostAdded}
+      />
+      <AddAxHostModal
+        visible={isAxHostVisible}
         onClose={closeAddConnectionFlow}
         onCancel={goBackToAddConnectionMethods}
         onSaved={handleHostAdded}
