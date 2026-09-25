@@ -25,6 +25,7 @@ function evidence(
   verificationStatus: OrchestrationEvidence["verificationStatus"],
 ): OrchestrationEvidence {
   return {
+    requiresHumanReview: false,
     turn: { status: "completed" },
     verificationStatus,
     checks:
