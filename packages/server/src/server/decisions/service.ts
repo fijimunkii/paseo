@@ -224,6 +224,10 @@ export class DecisionService {
     return { ...outcome, permit };
   }
 
+  getDecisionMode(): "shadow" | "enforce" {
+    return this.config.mode;
+  }
+
   getOrchestrationPolicy(): OrchestrationDecisionPolicyConfig | null {
     const policy = this.config.policies.orchestration;
     return policy?.enabled ? policy : null;
