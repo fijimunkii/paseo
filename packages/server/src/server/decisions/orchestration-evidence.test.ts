@@ -69,6 +69,21 @@ describe("buildOrchestrationEvidence", () => {
     expect(evidence.checks).toEqual([]);
   });
 
+  test("does not trust verification commands with wrappers or masked exit codes", () => {
+    const evidence = buildOrchestrationEvidence({
+      timeline: [
+        shell("echo npm test", 0),
+        shell("npm test || true", 0),
+        shell("npm test; echo ignored", 0),
+        shell("sh -c 'npm test'", 0),
+      ],
+      turnStatus: "completed",
+    });
+
+    expect(evidence.verificationStatus).toBe("not_run");
+    expect(evidence.checks).toEqual([]);
+  });
+
   test("deduplicates failure signatures so repeated identical failures do not create lottery tickets", () => {
     const evidence = buildOrchestrationEvidence({
       timeline: [shell("npm test", 1), shell("npm test", 1), shell("npm run lint", 1)],
