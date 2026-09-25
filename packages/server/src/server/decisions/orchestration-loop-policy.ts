@@ -34,6 +34,9 @@ function boundedRequestedDirective(
   policy: OrchestrationDecisionPolicyConfig,
   state: OrchestrationLoopState,
 ): OrchestrationDirective {
+  if (directive === "verify") {
+    return "verify";
+  }
   if (directive === "escalate") {
     return state.escalations < policy.maxEscalations ? "escalate" : "review";
   }
