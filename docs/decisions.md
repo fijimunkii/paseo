@@ -259,8 +259,12 @@ The record contains:
 - latency and token usage
 - safe error kind when evaluation failed
 - optional agent/tool identity
+- optional bounded orchestration application history: requested provider/model/thinking tuple,
+  Jev-recommended lane/directive, Paseo-applied lane/directive, attempt/escalation counters, and safe
+  evidence summaries (check statuses, changed-path count, failure-signature count, and git diff counts)
 
-The record does not contain the decision state, task prompt, operation payload, or API key.
+The record does not contain the decision state, task prompt, operation payload, raw diff, raw shell
+output, worker completion prose, or API key.
 
 The decision fingerprint binds the code-owned Jev-visible state to the definition, deterministic
 policy version/configuration, engine availability, endpoint, requested model, threshold, failure
