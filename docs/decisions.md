@@ -58,7 +58,6 @@ present. It does not forward MCP passthrough fields, labels, arbitrary feature v
 contents. The Jev-visible state is hashed into a decision fingerprint for sampling/audit reuse;
 the complete validated operation is separately hashed for exact permit binding.
 
-
 Orchestration task assessment sends only the task/title plus the requested provider, model, and
 thinking option. Checkpoint assessment sends bounded evidence selected by Paseo: turn status, recognized
 verification results, deduplicated failure signatures, bounded changed-file paths, and git
@@ -134,7 +133,6 @@ the model IDs available to the account and configure one of those exact IDs.
 
 Decision configuration is startup configuration in this implementation. Restart the daemon after
 changing `decisions` or `TYPESAFE_API_KEY`.
-
 
 ## Managed orchestration
 
@@ -236,7 +234,6 @@ card for decision review.
 The TypeSafe transport does not retry `POST /v1/systemone`. Paseo samples one semantic decision for
 one decision fingerprint. A recorded result or failure is reused whenever the policy/model and the
 Jev-visible state are unchanged, rather than repeatedly querying until an allow appears.
-
 
 The same anti-resampling rule applies to orchestration. Attempt counters and retry-loop position are
 not included merely to create another probabilistic sample. A fresh checkpoint sample requires
