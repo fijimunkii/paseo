@@ -185,6 +185,10 @@ describe("routeOrchestrationTask", () => {
   });
 
   test("shadow mode records stale lane configuration without blocking execution", async () => {
+    const staleProvider = providerEntry();
+    staleProvider.models = staleProvider.models?.filter((model) => model.id !== "strong");
+    const getProvider = vi.fn(async () => staleProvider);
+
     const result = await routeOrchestrationTask({
       service: {
         getOrchestrationPolicy: () => policy,
@@ -196,12 +200,7 @@ describe("routeOrchestrationTask", () => {
           }),
         ),
       },
-      providerCatalog: {
-        getProvider: vi.fn(async () => ({
-          ...providerEntry(),
-          models: providerEntry().models?.filter((model) => model.id !== "strong"),
-        })),
-      },
+      providerCatalog: { getProvider },
       task: "Do difficult work",
       requestedProvider: "codex",
       requestedModel: "fast",
