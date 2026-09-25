@@ -1702,17 +1702,18 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       request.settings && typeof request.settings === "object" && !Array.isArray(request.settings)
         ? request.settings
         : {};
-    const { thinkingOptionId: _ignoredThinkingOptionId, ...settingsWithoutThinking } =
-      existingSettings;
-    const settings = {
-      ...settingsWithoutThinking,
-      ...(thinkingOptionId ? { thinkingOptionId } : {}),
-    };
+    const settings: Record<string, JsonValue> = { ...existingSettings };
+    delete settings.thinkingOptionId;
+    if (thinkingOptionId) {
+      settings.thinkingOptionId = thinkingOptionId;
+    }
 
+    const requestWithoutSettings = { ...request };
+    delete requestWithoutSettings.settings;
     return z.json().parse({
-      ...request,
+      ...requestWithoutSettings,
       provider,
-      ...(Object.keys(settings).length > 0 ? { settings } : { settings: undefined }),
+      ...(Object.keys(settings).length > 0 ? { settings } : {}),
     });
   }
 
