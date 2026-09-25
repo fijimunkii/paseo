@@ -147,10 +147,7 @@ function requireAppliedLaneId(outcome: DecisionOutcome): OrchestrationLaneId {
     );
   }
   if (outcome.actualDisposition.kind === "deny") {
-    throw new OrchestrationRoutingError(
-      "denied",
-      "Jev orchestration denied managed task routing",
-    );
+    throw new OrchestrationRoutingError("denied", "Jev orchestration denied managed task routing");
   }
   if (outcome.actualDisposition.kind !== "route") {
     throw new OrchestrationRoutingError(

@@ -73,8 +73,7 @@ export const ORCHESTRATION_TASK_DECISION: DecisionDefinition = {
           "Localized, straightforward work with low uncertainty and little cross-cutting impact.",
         medium:
           "Moderate implementation work requiring multiple steps or some non-trivial reasoning, but no major architectural uncertainty.",
-        high:
-          "Cross-cutting, difficult, security-sensitive, or otherwise complex work that benefits from sustained high reasoning.",
+        high: "Cross-cutting, difficult, security-sensitive, or otherwise complex work that benefits from sustained high reasoning.",
         architectural:
           "The task has substantial architectural uncertainty or broad system-level consequences and warrants the strongest configured reasoning lane.",
       },
@@ -107,10 +106,7 @@ export const ORCHESTRATION_TASK_DECISION: DecisionDefinition = {
     if (complexity.confidence < minimumConfidence || ambiguity.probability >= minimumConfidence) {
       return { kind: "review" };
     }
-    if (
-      strongReasoning.probability >= minimumConfidence ||
-      complexity.choice === "architectural"
-    ) {
+    if (strongReasoning.probability >= minimumConfidence || complexity.choice === "architectural") {
       return { kind: "route", target: "escalated" };
     }
     if (complexity.choice === "high") {
@@ -188,4 +184,3 @@ export const ORCHESTRATION_CHECKPOINT_DECISION: DecisionDefinition = {
     return { kind: "review" };
   },
 };
-

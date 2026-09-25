@@ -1,9 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import {
-  ORCHESTRATION_CHECKPOINT_DECISION,
-  ORCHESTRATION_TASK_DECISION,
-} from "./policy.js";
+import { ORCHESTRATION_CHECKPOINT_DECISION, ORCHESTRATION_TASK_DECISION } from "./policy.js";
 
 describe("orchestration decision definitions", () => {
   test("routes a clear small task to the small lane", () => {

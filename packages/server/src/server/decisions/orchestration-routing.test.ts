@@ -3,10 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { OrchestrationDecisionPolicyConfig } from "@getpaseo/protocol/decision-config";
 import type { ProviderSnapshotEntry } from "../agent/agent-sdk-types.js";
 import type { DecisionOutcome } from "./service.js";
-import {
-  OrchestrationRoutingError,
-  routeOrchestrationTask,
-} from "./orchestration-routing.js";
+import { OrchestrationRoutingError, routeOrchestrationTask } from "./orchestration-routing.js";
 
 const policy: OrchestrationDecisionPolicyConfig = {
   enabled: true,

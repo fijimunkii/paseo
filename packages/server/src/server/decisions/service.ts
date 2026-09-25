@@ -547,10 +547,7 @@ export class DecisionService {
     );
   }
 
-  private policyHash(
-    definition: DecisionDefinition,
-    policy: RuntimeDecisionPolicy,
-  ): string {
+  private policyHash(definition: DecisionDefinition, policy: RuntimeDecisionPolicy): string {
     const material: JsonValue = {
       definitionHash: this.definitionHash(definition),
       policyVersion: definition.policyVersion,
@@ -565,10 +562,7 @@ export class DecisionService {
     return digest(canonicalJson(material));
   }
 
-
-  private createAgentPolicy(
-    policy: CreateAgentToolDecisionPolicyConfig,
-  ): RuntimeDecisionPolicy {
+  private createAgentPolicy(policy: CreateAgentToolDecisionPolicyConfig): RuntimeDecisionPolicy {
     return {
       minimumConfidence: policy.minimumConfidence,
       failureDisposition: policy.failureDisposition,
@@ -580,9 +574,7 @@ export class DecisionService {
     };
   }
 
-  private orchestrationPolicy(
-    policy: OrchestrationDecisionPolicyConfig,
-  ): RuntimeDecisionPolicy {
+  private orchestrationPolicy(policy: OrchestrationDecisionPolicyConfig): RuntimeDecisionPolicy {
     const lanes = policy.lanes
       ? {
           small: this.lanePolicyMaterial(policy.lanes.small),
@@ -617,7 +609,6 @@ export class DecisionService {
       ...(lane.thinkingOptionId ? { thinkingOptionId: lane.thinkingOptionId } : {}),
     };
   }
-
 }
 
 export function createDecisionService(options: {

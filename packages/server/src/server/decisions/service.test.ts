@@ -104,7 +104,6 @@ function result(choice: "allow" | "review" | "deny", confidence = 0.99): Decisio
   };
 }
 
-
 function orchestrationConfig(mode: "shadow" | "enforce" = "shadow") {
   return {
     mode,
@@ -744,5 +743,4 @@ describe("DecisionService", () => {
     expect(engine.calls).toBe(1);
     expect(auditStore.records.size).toBe(1);
   });
-
 });
