@@ -13,6 +13,7 @@ export interface OrchestrationCheckEvidence {
 
 export interface OrchestrationEvidence {
   requiresHumanReview: boolean;
+  changedPaths: string[];
   turn: {
     status: "completed" | "failed" | "canceled";
     errorKind?: string;
@@ -26,7 +27,6 @@ export interface OrchestrationEvidence {
     additions: number | null;
     deletions: number | null;
   } | null;
-  assistantResult: string | null;
 }
 
 const MAX_ASSISTANT_RESULT_CHARS = 2_000;
@@ -136,20 +136,12 @@ function collectToolFailureSignatures(timeline: readonly AgentTimelineItem[]): s
   return [...signatures].sort();
 }
 
-function truncateAssistantResult(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.slice(0, MAX_ASSISTANT_RESULT_CHARS);
-}
-
 export function buildOrchestrationEvidence(input: {
   timeline: readonly AgentTimelineItem[];
   turnStatus: "completed" | "failed" | "canceled";
   errorKind?: string;
   requiresHumanReview?: boolean;
-  assistantResult?: string | null;
+  changedPaths?: readonly string[];
   git?: {
     isGit: boolean;
     isDirty: boolean | null;
@@ -157,8 +149,22 @@ export function buildOrchestrationEvidence(input: {
   } | null;
 }): OrchestrationEvidence {
   const checks = collectChecks(input.timeline);
+  const timelineChangedPaths = input.timeline.flatMap((item) => {
+    if (item.type !== "tool_call") {
+      return [];
+    }
+    if (item.detail.type === "edit" || item.detail.type === "write") {
+      return [item.detail.filePath];
+    }
+    return [];
+  });
+  const changedPaths = [...new Set([...(input.changedPaths ?? []), ...timelineChangedPaths])]
+    .sort()
+    .slice(0, 100);
+
   return {
     requiresHumanReview: input.requiresHumanReview ?? false,
+    changedPaths,
     turn: {
       status: input.turnStatus,
       ...(input.errorKind ? { errorKind: input.errorKind } : {}),
@@ -174,6 +180,5 @@ export function buildOrchestrationEvidence(input: {
           deletions: input.git.diffStat?.deletions ?? null,
         }
       : null,
-    assistantResult: truncateAssistantResult(input.assistantResult),
   };
 }
