@@ -18,7 +18,8 @@ import type { DecisionOutcome, DecisionService } from "./service.js";
 type CheckpointDecisionService = Pick<
   DecisionService,
   "getDecisionMode" | "getOrchestrationPolicy" | "assessOrchestrationCheckpoint"
->;
+> &
+  Partial<Pick<DecisionService, "recordOrchestrationApplication">>;
 
 export interface ManagedOrchestrationLoopResult {
   directive: OrchestrationDirective;
@@ -65,6 +66,41 @@ function previewOutcome(outcome: DecisionOutcome): DecisionOutcome {
     ...outcome,
     actualDisposition: outcome.wouldDisposition,
   };
+}
+
+function outcomeRecommendation(outcome: DecisionOutcome): string {
+  return outcome.wouldDisposition.kind === "route"
+    ? outcome.wouldDisposition.target
+    : outcome.wouldDisposition.kind;
+}
+
+function recordCheckpointApplication(input: {
+  service: CheckpointDecisionService;
+  outcome: DecisionOutcome;
+  directive: OrchestrationDirective;
+  evidence: OrchestrationEvidence;
+  state: OrchestrationLoopState;
+  applied: string | null;
+}): void {
+  input.service.recordOrchestrationApplication?.(input.outcome.fingerprint, {
+    kind: "checkpoint",
+    recommended: input.directive,
+    applied: input.applied,
+    shadow: input.outcome.mode === "shadow",
+    attempts: input.state.attempts,
+    escalations: input.state.escalations,
+    evidence: {
+      requiresHumanReview: input.evidence.requiresHumanReview,
+      verificationStatus: input.evidence.verificationStatus,
+      checks: input.evidence.checks.map((check) => ({
+        kind: check.kind,
+        status: check.status,
+      })),
+      changedPathCount: input.evidence.changedPaths.length,
+      failureSignatureCount: input.evidence.toolFailureSignatures.length,
+      git: input.evidence.git,
+    },
+  });
 }
 
 function countsAsImplementationAttempt(
@@ -211,6 +247,14 @@ export async function runManagedOrchestrationLoop(input: {
     });
 
     if (outcome?.mode === "shadow") {
+      recordCheckpointApplication({
+        service: input.service,
+        outcome,
+        directive,
+        evidence,
+        state,
+        applied: null,
+      });
       return {
         directive,
         attempts: state.attempts,
@@ -220,6 +264,17 @@ export async function runManagedOrchestrationLoop(input: {
         shadow: true,
       };
     }
+    if (outcome) {
+      recordCheckpointApplication({
+        service: input.service,
+        outcome,
+        directive,
+        evidence,
+        state,
+        applied: directive,
+      });
+    }
+
     if (directive === "complete" || directive === "review") {
       return {
         directive,
