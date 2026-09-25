@@ -25,6 +25,56 @@ const DecisionContextSchema = z
   })
   .strict();
 
+const OrchestrationApplicationSchema = z
+  .object({
+    kind: z.enum(["task", "checkpoint"]),
+    createdAt: z.string().datetime({ offset: true }),
+    requested: z
+      .object({
+        provider: z.string().min(1),
+        model: z.string().min(1),
+        thinkingOptionId: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+    recommended: z.string().min(1).nullable(),
+    applied: z.string().min(1).nullable(),
+    shadow: z.boolean(),
+    attempts: z.number().int().positive().optional(),
+    escalations: z.number().int().nonnegative().optional(),
+    evidence: z
+      .object({
+        requiresHumanReview: z.boolean(),
+        verificationStatus: z.enum(["passed", "failed", "not_run"]),
+        checks: z
+          .array(
+            z
+              .object({
+                kind: z.enum(["test", "typecheck", "lint", "build"]),
+                status: z.enum(["passed", "failed", "unavailable"]),
+              })
+              .strict(),
+          )
+          .max(16),
+        changedPathCount: z.number().int().nonnegative(),
+        failureSignatureCount: z.number().int().nonnegative(),
+        git: z
+          .object({
+            isGit: z.boolean(),
+            isDirty: z.boolean().nullable(),
+            additions: z.number().int().nonnegative().nullable(),
+            deletions: z.number().int().nonnegative().nullable(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export type OrchestrationApplication = z.infer<typeof OrchestrationApplicationSchema>;
+
 export const DecisionAuditRecordSchema = z
   .object({
     fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
@@ -45,6 +95,7 @@ export const DecisionAuditRecordSchema = z
     latencyMs: z.number().int().nonnegative(),
     errorKind: z.string().min(1).optional(),
     context: DecisionContextSchema.optional(),
+    orchestrationApplications: z.array(OrchestrationApplicationSchema).max(20).optional(),
   })
   .strict();
 
