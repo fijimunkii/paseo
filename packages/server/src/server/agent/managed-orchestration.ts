@@ -1,7 +1,7 @@
 import type { Logger } from "pino";
 
 import type { OrchestrationRoutingMode } from "@getpaseo/protocol/decision-config";
-import type { AgentManager, WaitForAgentResult } from "./agent-manager.js";
+import type { AgentManager, ManagedAgent, WaitForAgentResult } from "./agent-manager.js";
 import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { sendPromptToAgent } from "./agent-prompt.js";
@@ -135,7 +135,7 @@ async function collectTurnEvidence(input: {
   });
 }
 
-export async function routeManagedAgentTask(input: {
+interface ManagedTaskRoutingInput {
   decisionService: Partial<ManagedAgentDecisionService> | null | undefined;
   agentManager: AgentManager;
   agentStorage: AgentStorage;
@@ -145,22 +145,32 @@ export async function routeManagedAgentTask(input: {
   task: string;
   routing?: OrchestrationRoutingMode;
   signal: AbortSignal;
-}): Promise<OrchestrationTaskRoutingResult> {
+}
+
+function manualTaskRoutingResult(): OrchestrationTaskRoutingResult {
+  return {
+    routing: "manual",
+    outcome: null,
+    recommendedLane: null,
+    appliedLane: null,
+    recommendationError: null,
+  };
+}
+
+function shouldManageTask(input: ManagedTaskRoutingInput): boolean {
   const policy = input.decisionService?.getOrchestrationPolicy?.() ?? null;
   const effectiveRouting = input.routing ?? policy?.defaultRouting ?? "manual";
-  if (
-    effectiveRouting !== "managed" ||
-    typeof input.decisionService?.assessOrchestrationTask !== "function"
-  ) {
-    return {
-      routing: "manual",
-      outcome: null,
-      recommendedLane: null,
-      appliedLane: null,
-      recommendationError: null,
-    };
-  }
+  return (
+    effectiveRouting === "managed" &&
+    typeof input.decisionService?.assessOrchestrationTask === "function"
+  );
+}
 
+async function resolveManagedTaskAgent(input: ManagedTaskRoutingInput): Promise<{
+  agent: ManagedAgent;
+  requestedModel: string;
+  requestedThinkingOptionId: string | undefined;
+}> {
   await ensureAgentLoaded(input.agentId, {
     agentManager: input.agentManager,
     agentStorage: input.agentStorage,
@@ -182,28 +192,66 @@ export async function routeManagedAgentTask(input: {
     throw new Error(`Cannot determine the current model for managed agent ${input.agentId}`);
   }
 
+  return {
+    agent,
+    requestedModel,
+    requestedThinkingOptionId:
+      agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
+  };
+}
+
+async function applyManagedTaskRouting(input: {
+  request: ManagedTaskRoutingInput;
+  agent: ManagedAgent;
+  requestedModel: string;
+  requestedThinkingOptionId: string | undefined;
+  routing: OrchestrationTaskRoutingResult;
+}): Promise<void> {
+  if (input.routing.appliedLane) {
+    await input.request.agentManager.applyAgentExecutionLane(
+      input.request.agentId,
+      input.routing.appliedLane,
+    );
+  }
+  recordOrchestrationTaskApplication({
+    service: input.request.decisionService,
+    outcome: input.routing.outcome,
+    requestedProvider: input.agent.provider,
+    requestedModel: input.requestedModel,
+    requestedThinkingOptionId: input.requestedThinkingOptionId,
+    applied:
+      input.routing.outcome?.mode === "shadow"
+        ? "manual"
+        : (input.routing.appliedLane?.laneId ?? null),
+  });
+}
+
+export async function routeManagedAgentTask(
+  input: ManagedTaskRoutingInput,
+): Promise<OrchestrationTaskRoutingResult> {
+  if (!shouldManageTask(input)) {
+    return manualTaskRoutingResult();
+  }
+
+  const resolved = await resolveManagedTaskAgent(input);
   const routing = await routeOrchestrationTask({
     service: input.decisionService,
     providerCatalog: input.providerSnapshotManager,
     task: input.task,
-    requestedProvider: agent.provider,
-    requestedModel,
-    requestedThinkingOptionId: agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
+    requestedProvider: resolved.agent.provider,
+    requestedModel: resolved.requestedModel,
+    requestedThinkingOptionId: resolved.requestedThinkingOptionId,
     requestedRouting: input.routing,
-    cwd: agent.cwd,
+    cwd: resolved.agent.cwd,
     agentId: input.agentId,
     signal: input.signal,
   });
-  if (routing.appliedLane) {
-    await input.agentManager.applyAgentExecutionLane(input.agentId, routing.appliedLane);
-  }
-  recordOrchestrationTaskApplication({
-    service: input.decisionService,
-    outcome: routing.outcome,
-    requestedProvider: agent.provider,
-    requestedModel,
-    requestedThinkingOptionId: agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId,
-    applied: routing.outcome?.mode === "shadow" ? "manual" : (routing.appliedLane?.laneId ?? null),
+  await applyManagedTaskRouting({
+    request: input,
+    agent: resolved.agent,
+    requestedModel: resolved.requestedModel,
+    requestedThinkingOptionId: resolved.requestedThinkingOptionId,
+    routing,
   });
   return routing;
 }
