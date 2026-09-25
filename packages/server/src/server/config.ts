@@ -528,9 +528,10 @@ function resolveDecisionConfig(
 
   const typesafe = configured.typesafe;
   const createAgentToolEnabled = configured.policies.createAgentTool?.enabled === true;
+  const orchestrationEnabled = configured.policies.orchestration?.enabled === true;
   if (
     configured.mode === "enforce" &&
-    createAgentToolEnabled &&
+    (createAgentToolEnabled || orchestrationEnabled) &&
     typesafe?.enabled === true &&
     typesafe.model === "jev-latest"
   ) {
