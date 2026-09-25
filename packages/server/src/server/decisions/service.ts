@@ -14,6 +14,7 @@ import {
   DecisionAuditStore,
   type DecisionAuditRecord,
   type DecisionAuditStoreLike,
+  type OrchestrationApplication,
 } from "./audit.js";
 import { DecisionPermitIssuer, type DecisionPermit } from "./permit.js";
 import {
@@ -247,6 +248,60 @@ export class DecisionService {
       context: input.context,
       signal: input.signal,
     });
+  }
+
+  recordOrchestrationApplication(
+    fingerprint: string,
+    application: Omit<OrchestrationApplication, "createdAt">,
+  ): void {
+    let record = this.cache.get(fingerprint) ?? null;
+    if (!record) {
+      try {
+        record = this.auditStore.get(fingerprint);
+      } catch (error) {
+        this.logger.warn(
+          { err: error, fingerprint },
+          "Failed to read decision audit record for orchestration application",
+        );
+        if (this.config.mode === "enforce") {
+          throw error;
+        }
+        return;
+      }
+    }
+    if (!record) {
+      const error = new Error(`Decision audit record missing for orchestration application ${fingerprint}`);
+      if (this.config.mode === "enforce") {
+        throw error;
+      }
+      this.logger.warn({ fingerprint }, error.message);
+      return;
+    }
+
+    const next: DecisionAuditRecord = {
+      ...record,
+      orchestrationApplications: [
+        ...(record.orchestrationApplications ?? []),
+        {
+          ...application,
+          createdAt: new Date(this.now()).toISOString(),
+        },
+      ].slice(-20),
+    };
+
+    try {
+      this.auditStore.put(next);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, fingerprint },
+        "Failed to persist orchestration application audit",
+      );
+      if (this.config.mode === "enforce") {
+        throw error;
+      }
+      return;
+    }
+    this.cache.set(fingerprint, next);
   }
 
   async assessOrchestrationCheckpoint(
