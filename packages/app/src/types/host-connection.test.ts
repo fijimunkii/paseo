@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { defaultHostAppearance } from "@/hosts/appearance";
 import {
   createRemoteSshHostConnection,
+  defaultLifecycle,
   normalizeStoredHostProfile,
   orderHostsLocalFirst,
   resolveActiveHostServerId,
+  serializeHostRegistryForStorage,
   upsertHostConnectionInProfiles,
   type HostConnection,
   type HostProfile,
@@ -15,7 +17,7 @@ function makeHost(serverId: string): HostProfile {
     serverId,
     label: serverId,
     appearance: defaultHostAppearance(),
-    lifecycle: {},
+    lifecycle: defaultLifecycle(),
     connections: [],
     preferredConnectionId: null,
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -143,6 +145,69 @@ describe("normalizeStoredHostProfile", () => {
     expect(profile?.appearance).toEqual({ color: "teal", badgeDisplay: "icon" });
   });
 
+  it("normalizes legacy empty lifecycle metadata as unmanaged", () => {
+    const profile = normalizeStoredHostProfile({
+      serverId: "srv_legacy",
+      lifecycle: {},
+      connections: [
+        { id: "socket:/tmp/paseo.sock", type: "directSocket", path: "/tmp/paseo.sock" },
+      ],
+    });
+
+    expect(profile?.lifecycle).toEqual({ kind: "unmanaged" });
+  });
+
+  it("serializes unmanaged lifecycle in the legacy empty-object form", () => {
+    const unmanaged = makeHost("srv_unmanaged");
+    const managed: HostProfile = {
+      ...makeHost("srv_ax"),
+      lifecycle: {
+        kind: "ax",
+        kubeContext: "dev-cluster",
+        namespace: "ax-system",
+        atespace: "default",
+        taskName: "paseo-host-1",
+        workspaceName: "paseo-workspace-1",
+        gatewayName: "paseo-gateway-1",
+      },
+    };
+
+    const stored = serializeHostRegistryForStorage([unmanaged, managed]);
+
+    expect(stored).toEqual([
+      expect.objectContaining({ serverId: "srv_unmanaged", lifecycle: {} }),
+      expect.objectContaining({ serverId: "srv_ax", lifecycle: managed.lifecycle }),
+    ]);
+  });
+
+  it("loads AX managed lifecycle identity", () => {
+    const profile = normalizeStoredHostProfile({
+      serverId: "srv_ax",
+      lifecycle: {
+        kind: "ax",
+        kubeContext: " dev-cluster ",
+        namespace: " ax-system ",
+        atespace: " default ",
+        taskName: " paseo-host-1 ",
+        workspaceName: " paseo-workspace-1 ",
+        gatewayName: " paseo-gateway-1 ",
+      },
+      connections: [
+        { id: "socket:/tmp/paseo.sock", type: "directSocket", path: "/tmp/paseo.sock" },
+      ],
+    });
+
+    expect(profile?.lifecycle).toEqual({
+      kind: "ax",
+      kubeContext: "dev-cluster",
+      namespace: "ax-system",
+      atespace: "default",
+      taskName: "paseo-host-1",
+      workspaceName: "paseo-workspace-1",
+      gatewayName: "paseo-gateway-1",
+    });
+  });
+
   it("normalizes stored Remote SSH connection parameters", () => {
     const profile = normalizeStoredHostProfile({
       serverId: "srv_ssh",
@@ -220,6 +285,31 @@ describe("upsertHostConnectionInProfiles", () => {
     });
 
     expect(profile.appearance).toEqual({ color: "amber", badgeDisplay: "hidden" });
+  });
+
+  it("keeps AX lifecycle identity when the host reconnects", () => {
+    const lifecycle: HostProfile["lifecycle"] = {
+      kind: "ax",
+      kubeContext: "dev-cluster",
+      namespace: "ax-system",
+      atespace: "default",
+      taskName: "paseo-host-1",
+      workspaceName: "paseo-workspace-1",
+      gatewayName: "paseo-gateway-1",
+    };
+    const existing: HostProfile = {
+      ...makeHost("srv_known"),
+      lifecycle,
+      connections: [],
+    };
+
+    const [profile] = upsertHostConnectionInProfiles({
+      profiles: [existing],
+      serverId: "srv_known",
+      connection,
+    });
+
+    expect(profile.lifecycle).toEqual(lifecycle);
   });
 
   it("replaces a direct connection when its settings change", () => {

@@ -36,6 +36,7 @@ jobs:
       browser: ${{ steps.filter.outputs.browser }}
       relay: ${{ steps.filter.outputs.relay }}
       cli: ${{ steps.filter.outputs.cli }}
+      ax_runtime: ${{ steps.filter.outputs.ax_runtime }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -460,6 +461,42 @@ jobs:
 
       - name: Run relay tests
         run: npm run test --workspace=@getpaseo/relay
+
+  ax-runtime-smoke:
+    name: ax-runtime-smoke
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.full != 'false' || needs.changes.outputs.ax_runtime != 'false') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Validate AX runtime scripts
+        run: |
+          bash -n docker/ax/rootfs/usr/local/bin/ax-task-runner
+          bash -n docker/ax/rootfs/usr/local/bin/paseo-ax-daemon
+          bash -n docker/ax/smoke-test.sh
+          node --check docker/ax/rootfs/usr/local/bin/paseo-ax-runner-proxy.mjs
+
+      - name: Build Paseo AX image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/ax/Dockerfile
+          platforms: linux/amd64
+          tags: paseo-ax:ci-${{ github.sha }}
+          load: true
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=paseo-ax-ci
+          cache-to: type=gha,scope=paseo-ax-ci,mode=max
+
+      - name: Smoke test Paseo AX runner
+        env:
+          AX_IMAGE: paseo-ax:ci-${{ github.sha }}
+        run: bash docker/ax/smoke-test.sh
 
   cli-tests-1:
     name: cli-tests (shard 1/3)

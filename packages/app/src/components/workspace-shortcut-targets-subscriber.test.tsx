@@ -13,7 +13,7 @@ import { seedRuntimeWorkspaces } from "@/test/seed-session";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import { useSidebarViewStore } from "@/stores/sidebar-view-store";
-import type { HostProfile } from "@/types/host-connection";
+import { defaultLifecycle, type HostProfile } from "@/types/host-connection";
 import { WorkspaceShortcutTargetsSubscriber } from "./workspace-shortcut-targets-subscriber";
 import { SidebarModelProvider } from "./sidebar/sidebar-model";
 import { defaultHostAppearance } from "@/hosts/appearance";
@@ -53,7 +53,7 @@ function hostProfile(serverId = "srv"): HostProfile {
     serverId,
     label: "Shortcut Host",
     appearance: defaultHostAppearance(),
-    lifecycle: {},
+    lifecycle: defaultLifecycle(),
     connections: [],
     preferredConnectionId: null,
     createdAt: now,
