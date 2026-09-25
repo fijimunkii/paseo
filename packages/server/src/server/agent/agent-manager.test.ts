@@ -4985,6 +4985,78 @@ test("setAgentThinkingOption surfaces a failed state read and keeps the previous
   expect(persisted?.config?.thinkingOptionId).toBe("low");
 });
 
+test("applyAgentExecutionLane rolls back model when thinking change fails", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-lane-rollback-"));
+
+  class FailingLaneSession extends TestAgentSession {
+    private model: string | null;
+    private thinkingOptionId: string | null;
+
+    constructor(config: AgentSessionConfig) {
+      super(config);
+      this.model = config.model ?? null;
+      this.thinkingOptionId = config.thinkingOptionId ?? null;
+    }
+
+    async setModel(modelId: string | null): Promise<void> {
+      this.model = modelId;
+    }
+
+    async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
+      if (thinkingOptionId === "high") {
+        throw new Error("thinking change failed");
+      }
+      this.thinkingOptionId = thinkingOptionId;
+    }
+
+    override async getRuntimeInfo() {
+      return {
+        ...(await super.getRuntimeInfo()),
+        model: this.model,
+        thinkingOptionId: this.thinkingOptionId,
+      };
+    }
+  }
+
+  class FailingLaneClient extends TestAgentClient {
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      return new FailingLaneSession(config);
+    }
+  }
+
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+  const manager = new AgentManager({
+    clients: { codex: new FailingLaneClient() },
+    registry: storage,
+    logger,
+    idFactory: () => "00000000-0000-4000-8000-000000000137",
+  });
+  const snapshot = await manager.createAgent(
+    {
+      provider: "codex",
+      cwd: workdir,
+      model: "gpt-old",
+      thinkingOptionId: "low",
+    },
+    undefined,
+    { workspaceId: undefined },
+  );
+
+  await expect(
+    manager.applyAgentExecutionLane(snapshot.id, {
+      provider: "codex",
+      model: "gpt-new",
+      thinkingOptionId: "high",
+    }),
+  ).rejects.toThrow("thinking change failed");
+
+  const agent = manager.getAgent(snapshot.id);
+  expect(agent?.config.model).toBe("gpt-old");
+  expect(agent?.config.thinkingOptionId).toBe("low");
+  expect(agent?.runtimeInfo?.model).toBe("gpt-old");
+  expect(agent?.runtimeInfo?.thinkingOptionId).toBe("low");
+});
+
 test("session config drift events update state through the stream channel", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-session-config-events-"));
   let capturedSession: TestAgentSession | null = null;
