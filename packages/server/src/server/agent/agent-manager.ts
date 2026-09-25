@@ -1962,9 +1962,9 @@ export class AgentManager {
         await this.setAgentModel(agentId, previousModel);
         await this.setAgentThinkingOption(agentId, previousThinkingOptionId);
       } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          "Failed to apply execution lane and restore the previous runtime configuration",
+        const originalMessage = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to apply execution lane and restore the previous runtime configuration after: ${originalMessage}`,
           { cause: rollbackError },
         );
       }
