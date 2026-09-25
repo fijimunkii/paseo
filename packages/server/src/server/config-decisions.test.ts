@@ -117,6 +117,34 @@ describe("daemon decision config", () => {
     );
   });
 
+  test("rejects moving model aliases for enabled orchestration enforcement", async () => {
+    const home = await createPaseoHome({
+      version: 1,
+      decisions: {
+        mode: "enforce",
+        typesafe: {
+          enabled: true,
+          model: "jev-latest",
+        },
+        policies: {
+          orchestration: {
+            enabled: true,
+            lanes: {
+              small: { provider: "codex", model: "fast", thinkingOptionId: "low" },
+              medium: { provider: "codex", model: "fast", thinkingOptionId: "medium" },
+              high: { provider: "codex", model: "fast", thinkingOptionId: "high" },
+              escalated: { provider: "codex", model: "strong", thinkingOptionId: "high" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(() => loadConfig(home, { env: { TYPESAFE_API_KEY: "typesafe-secret" } })).toThrow(
+      "Enforced decisions require a pinned TypeSafe model",
+    );
+  });
+
   test("accepts a pinned model for enforcement", async () => {
     const home = await createPaseoHome({
       version: 1,
