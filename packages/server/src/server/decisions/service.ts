@@ -224,6 +224,11 @@ export class DecisionService {
     return { ...outcome, permit };
   }
 
+  getOrchestrationPolicy(): OrchestrationDecisionPolicyConfig | null {
+    const policy = this.config.policies.orchestration;
+    return policy?.enabled ? policy : null;
+  }
+
   async assessOrchestrationTask(
     input: OrchestrationDecisionInput,
   ): Promise<DecisionOutcome | null> {
