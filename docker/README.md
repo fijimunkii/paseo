@@ -28,3 +28,12 @@ RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
 See [docs/docker.md](../docs/docker.md) for Compose, reverse proxy, security,
 agent auth, and troubleshooting notes.
+
+## Agent Executor (AX)
+
+`docker/ax/Dockerfile` builds `ghcr.io/fijimunkii/paseo-ax:<version>`, an AX-compatible
+Paseo daemon image. It wraps the pinned upstream `ax-task-runner`, persists the runner's
+state beneath `/workspace`, and starts the Paseo daemon as the unprivileged `paseo` user.
+
+See [docs/ax-managed-hosts.md](../docs/ax-managed-hosts.md) for provisioning, lifecycle,
+networking, persistence, and security behavior.
