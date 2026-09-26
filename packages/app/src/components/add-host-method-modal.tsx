@@ -2,13 +2,14 @@ import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Pressable, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { QrCode, Link2, ClipboardPaste, Terminal } from "lucide-react-native";
+import { Boxes, QrCode, Link2, ClipboardPaste, Terminal } from "lucide-react-native";
 import { AdaptiveModalSheet, type SheetHeader } from "./adaptive-modal-sheet";
 import { isFdroidBuild } from "@/constants/build-profile";
 import { isNative } from "@/constants/platform";
 import { isElectronRuntime } from "@/desktop/host";
 import type { Theme } from "@/styles/theme";
 
+const ThemedBoxes = withUnistyles(Boxes);
 const ThemedQrCode = withUnistyles(QrCode);
 const ThemedLink2 = withUnistyles(Link2);
 const ThemedClipboardPaste = withUnistyles(ClipboardPaste);
@@ -46,6 +47,7 @@ export interface AddHostMethodModalProps {
   onClose: () => void;
   onDirectConnection: () => void;
   onRemoteSsh: () => void;
+  onAgentExecutor: () => void;
   onScanQr: () => void;
   onPasteLink: () => void;
 }
@@ -55,6 +57,7 @@ export function AddHostMethodModal({
   onClose,
   onDirectConnection,
   onRemoteSsh,
+  onAgentExecutor,
   onScanQr,
   onPasteLink,
 }: AddHostMethodModalProps) {
@@ -72,6 +75,10 @@ export function AddHostMethodModal({
   const handleRemoteSsh = useCallback(() => {
     onRemoteSsh();
   }, [onRemoteSsh]);
+
+  const handleAgentExecutor = useCallback(() => {
+    onAgentExecutor();
+  }, [onAgentExecutor]);
 
   const handlePaste = useCallback(() => {
     onPasteLink();
@@ -113,6 +120,26 @@ export function AddHostMethodModal({
             <Text style={styles.optionText}>{t("pairing.connectionMethods.remoteSsh.title")}</Text>
             <Text style={styles.optionSubtext}>
               {t("pairing.connectionMethods.remoteSsh.description")}
+            </Text>
+          </View>
+        </Pressable>
+      ) : null}
+
+      {isElectronRuntime() ? (
+        <Pressable
+          style={styles.option}
+          onPress={handleAgentExecutor}
+          accessibilityRole="button"
+          accessibilityLabel={t("pairing.connectionMethods.agentExecutor.title")}
+          testID="add-host-method-agent-executor"
+        >
+          <ThemedBoxes size={18} uniProps={foregroundIconMapping} />
+          <View style={styles.optionBody}>
+            <Text style={styles.optionText}>
+              {t("pairing.connectionMethods.agentExecutor.title")}
+            </Text>
+            <Text style={styles.optionSubtext}>
+              {t("pairing.connectionMethods.agentExecutor.description")}
             </Text>
           </View>
         </Pressable>

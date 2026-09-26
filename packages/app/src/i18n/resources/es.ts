@@ -1669,6 +1669,10 @@ export const es: TranslationResources = {
         title: "SSH remoto",
         description: "Conéctate mediante el cliente SSH de escritorio.",
       },
+      agentExecutor: {
+        title: "Agent Executor (AX)",
+        description: "Provision an isolated Paseo host on an AX cluster.",
+      },
       scanQr: {
         title: "Escanea el códigoQR",
         description: "Conexión de retransmisión cifrada.",
@@ -1676,6 +1680,34 @@ export const es: TranslationResources = {
       pasteLink: {
         title: "Pegar enlace de emparejamiento",
         description: "Conexión de retransmisión cifrada.",
+      },
+    },
+    agentExecutor: {
+      title: "Agent Executor (AX)",
+      helper:
+        "Provision an isolated Paseo daemon in Google AX and pair it through the encrypted relay without enabling AX debug access.",
+      fields: {
+        task: "Task name",
+        context: "Kubernetes context",
+        namespace: "AX namespace",
+        atespace: "Atespace",
+        repo: "Git repository (optional)",
+        branch: "Git branch (optional)",
+        image: "AX Paseo image",
+        egress: "HTTPS egress hosts (comma separated)",
+        cpuRequest: "CPU request",
+        cpuLimit: "CPU limit",
+        memoryRequest: "Memory request",
+        memoryLimit: "Memory limit",
+      },
+      actions: {
+        cancel: "Cancel",
+        provision: "Provision",
+        provisioning: "Provisioning...",
+      },
+      errors: {
+        required: "Task name and Kubernetes context are required.",
+        egressRequired: "At least one HTTPS egress host is required.",
       },
     },
     direct: {
@@ -2382,6 +2414,31 @@ export const es: TranslationResources = {
         preview: {
           workspaceName: "my-workspace",
         },
+      },
+      agentExecutor: {
+        title: "Agent Executor (AX)",
+        status: "AX task status",
+        checking: "Checking...",
+        unknown: "Unknown",
+        refresh: "Refresh",
+        context: "Kubernetes context",
+        atespace: "Atespace",
+        task: "Task",
+        workspace: "Workspace",
+        gateway: "Gateway",
+        lifecycle: "Lifecycle",
+        lifecycleHint:
+          "Suspend preserves the AX workspace but restarts the process tree on resume. Destroy removes the AX task, workspace, and gateway.",
+        suspend: "Suspend",
+        suspending: "Suspending...",
+        resume: "Resume",
+        resuming: "Resuming...",
+        destroy: "Destroy AX host",
+        destroying: "Destroying...",
+        destroyTitle: "Destroy {{name}}?",
+        destroyMessage:
+          "This deletes the AX task, durable workspace, and gateway. To keep the AX resources and only forget this host in Paseo, use Remove host below instead.",
+        failed: "AX operation failed",
       },
       notFound: "Hostno encontrado",
       badges: {
