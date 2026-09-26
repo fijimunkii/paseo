@@ -84,3 +84,15 @@ relay:
 
 cli:
   - "packages/cli/**"
+
+ax_runtime:
+  - ".github/workflows/ci.yml"
+  - ".github/workflows/docker.yml"
+  - "docker/ax/**"
+  - "package.json"
+  - "package-lock.json"
+  - "packages/cli/src/commands/ax/**"
+  - "packages/protocol/src/managed-hosts-ax.ts"
+  - "packages/server/package.json"
+  - "packages/server/src/ax/**"
+  - "packages/server/tsconfig.server.json"

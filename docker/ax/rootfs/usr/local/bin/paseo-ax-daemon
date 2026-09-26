@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_root="/workspace/.paseo-host"
+home="${HOME:-${state_root}/home}"
+ownership_marker="${state_root}/ownership-v1"
+pairing_file="${state_root}/pairing.json"
+pairing_tmp="${pairing_file}.tmp"
+pairing_claimed="${state_root}/pairing.claimed.json"
+bootstrap_complete="${state_root}/bootstrap-complete"
+
+mkdir -p \
+  "$home" \
+  "${PASEO_HOME:-${home}/.paseo}" \
+  "${CLAUDE_CONFIG_DIR:-${home}/.claude}" \
+  "${CODEX_HOME:-${home}/.codex}" \
+  "${XDG_CONFIG_HOME:-${home}/.config}" \
+  "${XDG_DATA_HOME:-${home}/.local/share}" \
+  "${XDG_STATE_HOME:-${home}/.local/state}" \
+  "${XDG_CACHE_HOME:-${home}/.cache}"
+
+if [[ ! -f "$ownership_marker" ]]; then
+  chown -R paseo:paseo /workspace
+  gosu paseo touch "$ownership_marker"
+fi
+
+if [[ ! -f "$bootstrap_complete" ]]; then
+  rm -f "$pairing_tmp" "$pairing_claimed"
+  gosu paseo paseo daemon pair --relay --json > "$pairing_tmp"
+  chown paseo:paseo "$pairing_tmp"
+  chmod 600 "$pairing_tmp"
+  mv "$pairing_tmp" "$pairing_file"
+else
+  rm -f "$pairing_tmp" "$pairing_file" "$pairing_claimed"
+fi
+
+exec gosu paseo paseo daemon run

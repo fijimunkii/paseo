@@ -27,6 +27,7 @@ const gatedCiJobs = new Map([
   ["playwright-3", { name: "playwright (shard 3/4)", contract: "browser" }],
   ["playwright-4", { name: "playwright (shard 4/4)", contract: "browser" }],
   ["relay-tests", { name: "relay-tests", contract: "relay" }],
+  ["ax-runtime-smoke", { name: "ax-runtime-smoke", contract: "ax_runtime" }],
   ["cli-tests-1", { name: "cli-tests (shard 1/3)", contract: "cli" }],
   ["cli-tests-2", { name: "cli-tests (shard 2/3)", contract: "cli" }],
   ["cli-tests-3", { name: "cli-tests (shard 3/3)", contract: "cli" }],
@@ -202,6 +203,18 @@ test("PR routing declares stable behavior ownership", () => {
     ],
     relay: ["packages/relay/**"],
     cli: ["packages/cli/**"],
+    ax_runtime: [
+      ".github/workflows/ci.yml",
+      ".github/workflows/docker.yml",
+      "docker/ax/**",
+      "package.json",
+      "package-lock.json",
+      "packages/cli/src/commands/ax/**",
+      "packages/protocol/src/managed-hosts-ax.ts",
+      "packages/server/package.json",
+      "packages/server/src/ax/**",
+      "packages/server/tsconfig.server.json",
+    ],
   });
 });
 
@@ -280,6 +293,18 @@ test("browser and desktop tests have exclusive, directory-owned suites", () => {
     "packages/app/*config.{cjs,js,ts}",
     "packages/app/package.json",
   ]);
+});
+
+test("AX runtime smoke is shared by PR CI and release packaging", () => {
+  const ciSource = readFileSync(ciWorkflowPath, "utf8");
+  const dockerSource = readFileSync(dockerWorkflowPath, "utf8");
+  const smokeSource = readFileSync(new URL("docker/ax/smoke-test.sh", repoRoot), "utf8");
+
+  assert.match(ciSource, /name: ax-runtime-smoke/);
+  assert.match(ciSource, /bash docker\/ax\/smoke-test\.sh/);
+  assert.match(dockerSource, /bash docker\/ax\/smoke-test\.sh/);
+  assert.match(smokeSource, /x-paseo-bootstrap-token/);
+  assert.match(smokeSource, /test "\$\{code\}" = "410"/);
 });
 
 test("packaging runs on main without allocating pull-request runners", () => {
