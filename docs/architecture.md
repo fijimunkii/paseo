@@ -184,6 +184,15 @@ The production relay server lives in [getpaseo/paseo-relay](https://github.com/g
 
 See [SECURITY.md](../SECURITY.md) for the full threat model.
 
+### AX managed hosts
+
+Google AX / Agent Executor is integrated as a managed **daemon host**, not as an agent provider.
+Desktop or the CLI provisions an AX Task that runs a normal Paseo daemon; clients then connect
+through the existing E2EE relay host transport. Provider implementations remain daemon-local and
+unchanged. AX resource identity is persisted with the host so Desktop can inspect, suspend, resume,
+or destroy the execution environment independently of the daemon connection. See
+[ax-managed-hosts.md](ax-managed-hosts.md).
+
 ### Paseo Hub
 
 The optional Hub relationship is daemon-outbound and does not use the relay. Its connection,

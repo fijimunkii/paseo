@@ -376,9 +376,201 @@ export function HostSettingsPage({
 
       {isLocalDaemon ? <LocalDaemonSection /> : null}
 
-      {!isLocalDaemon ? <UpdateDaemonCard key={host.serverId} host={host} /> : null}
+      {host.lifecycle.kind === "ax" ? (
+        <AxManagedHostSection host={host} lifecycle={host.lifecycle} onDestroyed={onHostRemoved} />
+      ) : null}
+
+      {!isLocalDaemon && host.lifecycle.kind !== "ax" ? (
+        <UpdateDaemonCard key={host.serverId} host={host} />
+      ) : null}
 
       <RemoveHostSection host={host} isLocalDaemon={isLocalDaemon} onRemoved={onHostRemoved} />
+    </View>
+  );
+}
+
+function AxManagedHostSection({
+  host,
+  lifecycle,
+  onDestroyed,
+}: {
+  host: HostProfile;
+  lifecycle: Extract<HostProfile["lifecycle"], { kind: "ax" }>;
+  onDestroyed?: () => void;
+}) {
+  const { t } = useTranslation();
+  const { inspectManagedHost, suspendManagedHost, resumeManagedHost, destroyManagedHost } =
+    useHostMutations();
+  const [phase, setPhase] = useState<string | null>(null);
+  const [operation, setOperation] = useState<"inspect" | "suspend" | "resume" | "destroy" | null>(
+    "inspect",
+  );
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setOperation("inspect");
+    setErrorMessage(null);
+    void inspectManagedHost(host.serverId)
+      .then((status) => {
+        setPhase(status.phase);
+        return undefined;
+      })
+      .catch((error) => setErrorMessage(error instanceof Error ? error.message : String(error)))
+      .finally(() => setOperation(null));
+  }, [host.serverId, inspectManagedHost]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const run = useCallback(
+    (action: "suspend" | "resume") => {
+      setOperation(action);
+      setErrorMessage(null);
+      const request =
+        action === "suspend" ? suspendManagedHost(host.serverId) : resumeManagedHost(host.serverId);
+      void request
+        .then(() => {
+          setPhase(action === "suspend" ? "Suspended" : "Running");
+          return undefined;
+        })
+        .catch((error) => setErrorMessage(error instanceof Error ? error.message : String(error)))
+        .finally(() => setOperation(null));
+    },
+    [host.serverId, resumeManagedHost, suspendManagedHost],
+  );
+
+  const handleSuspend = useCallback(() => run("suspend"), [run]);
+  const handleResume = useCallback(() => run("resume"), [run]);
+  const handleDestroy = useCallback(() => {
+    void confirmDialog({
+      title: t("settings.host.agentExecutor.destroyTitle", { name: host.label }),
+      message: t("settings.host.agentExecutor.destroyMessage"),
+      confirmLabel: t("settings.host.agentExecutor.destroy"),
+      cancelLabel: t("common.actions.cancel"),
+      destructive: true,
+    }).then((confirmed) => {
+      if (!confirmed) return undefined;
+      setOperation("destroy");
+      setErrorMessage(null);
+      void destroyManagedHost(host.serverId)
+        .then(() => {
+          onDestroyed?.();
+          return undefined;
+        })
+        .catch((error) => setErrorMessage(error instanceof Error ? error.message : String(error)))
+        .finally(() => setOperation(null));
+      return undefined;
+    });
+  }, [destroyManagedHost, host.label, host.serverId, onDestroyed, t]);
+
+  const isBusy = operation !== null;
+  const isSuspended = phase === "Suspended";
+
+  return (
+    <SettingsSection title={t("settings.host.agentExecutor.title")}>
+      <View style={settingsStyles.card} testID="host-page-ax-managed-host">
+        <View style={settingsStyles.row}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>{t("settings.host.agentExecutor.status")}</Text>
+            <Text style={settingsStyles.rowHint}>
+              {operation === "inspect"
+                ? t("settings.host.agentExecutor.checking")
+                : (phase ?? t("settings.host.agentExecutor.unknown"))}
+            </Text>
+          </View>
+          <Button variant="ghost" size="sm" onPress={refresh} disabled={isBusy}>
+            {t("settings.host.agentExecutor.refresh")}
+          </Button>
+        </View>
+        <AxManagedHostMetadata
+          label={t("settings.host.agentExecutor.context")}
+          value={lifecycle.kubeContext}
+        />
+        <AxManagedHostMetadata
+          label={t("settings.host.agentExecutor.atespace")}
+          value={lifecycle.atespace}
+        />
+        <AxManagedHostMetadata
+          label={t("settings.host.agentExecutor.task")}
+          value={lifecycle.taskName}
+        />
+        <AxManagedHostMetadata
+          label={t("settings.host.agentExecutor.workspace")}
+          value={lifecycle.workspaceName}
+        />
+        <AxManagedHostMetadata
+          label={t("settings.host.agentExecutor.gateway")}
+          value={lifecycle.gatewayName}
+        />
+        <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+          <View style={settingsStyles.rowContent}>
+            <Text style={settingsStyles.rowTitle}>
+              {t("settings.host.agentExecutor.lifecycle")}
+            </Text>
+            <Text style={settingsStyles.rowHint}>
+              {t("settings.host.agentExecutor.lifecycleHint")}
+            </Text>
+          </View>
+          <View style={styles.managedHostActions}>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={handleSuspend}
+              disabled={isBusy || isSuspended}
+              testID="host-page-ax-suspend"
+            >
+              {operation === "suspend"
+                ? t("settings.host.agentExecutor.suspending")
+                : t("settings.host.agentExecutor.suspend")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onPress={handleResume}
+              disabled={isBusy || !isSuspended}
+              testID="host-page-ax-resume"
+            >
+              {operation === "resume"
+                ? t("settings.host.agentExecutor.resuming")
+                : t("settings.host.agentExecutor.resume")}
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onPress={handleDestroy}
+              disabled={isBusy}
+              testID="host-page-ax-destroy"
+            >
+              {operation === "destroy"
+                ? t("settings.host.agentExecutor.destroying")
+                : t("settings.host.agentExecutor.destroy")}
+            </Button>
+          </View>
+        </View>
+        {errorMessage ? (
+          <View style={styles.managedHostError}>
+            <InlineAlert
+              variant="error"
+              title={t("settings.host.agentExecutor.failed")}
+              description={errorMessage}
+            />
+          </View>
+        ) : null}
+      </View>
+    </SettingsSection>
+  );
+}
+
+function AxManagedHostMetadata({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={[settingsStyles.row, settingsStyles.rowBorder]}>
+      <View style={settingsStyles.rowContent}>
+        <Text style={settingsStyles.rowTitle}>{label}</Text>
+      </View>
+      <Text style={styles.managedHostValue} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -1765,6 +1957,21 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     justifyContent: "flex-end",
     gap: theme.spacing[2],
+  },
+  managedHostActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: theme.spacing[2],
+  },
+  managedHostValue: {
+    maxWidth: 260,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  managedHostError: {
+    marginHorizontal: theme.spacing[4],
+    marginBottom: theme.spacing[4],
   },
   emptyCard: {
     padding: theme.spacing[4],

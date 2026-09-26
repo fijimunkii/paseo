@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state_root="/workspace/.paseo-host"
+ax_state="${state_root}/ax"
+
+mkdir -p "$ax_state"
+if [[ -e /ax && ! -L /ax ]]; then
+  rm -rf /ax
+fi
+ln -sfn "$ax_state" /ax
+
+runner_pid=""
+proxy_pid=""
+
+cleanup() {
+  trap - TERM INT EXIT
+  if [[ -n "$runner_pid" ]]; then
+    kill -TERM "$runner_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$proxy_pid" ]]; then
+    kill -TERM "$proxy_pid" 2>/dev/null || true
+  fi
+  [[ -z "$runner_pid" ]] || wait "$runner_pid" 2>/dev/null || true
+  [[ -z "$proxy_pid" ]] || wait "$proxy_pid" 2>/dev/null || true
+}
+
+trap cleanup TERM INT EXIT
+
+/usr/local/bin/ax-task-runner-upstream --port 8080 "$@" &
+runner_pid="$!"
+
+node /usr/local/bin/paseo-ax-runner-proxy.mjs &
+proxy_pid="$!"
+
+set +e
+wait -n "$runner_pid" "$proxy_pid"
+status="$?"
+set -e
+
+cleanup
+exit "$status"

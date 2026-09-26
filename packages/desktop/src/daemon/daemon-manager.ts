@@ -41,6 +41,7 @@ import {
   createDesktopSettingsCommandHandlers,
   type DesktopCommandHandler,
 } from "../settings/desktop-settings-commands.js";
+import { createAxManagedHostCommandHandlers } from "../features/ax-managed-hosts.js";
 import type { DesktopSettings } from "../settings/desktop-settings.js";
 import { getDesktopSettingsStore } from "../settings/desktop-settings-electron.js";
 import { isRunningUnderARM64Translation } from "../system/arm64-translation.js";
@@ -394,6 +395,7 @@ async function resolveRequestedReleaseChannel(
 export function createDaemonCommandHandlers(): Record<string, DesktopCommandHandler> {
   return {
     ...createDesktopSettingsCommandHandlers({ settingsStore: getDesktopSettingsStore() }),
+    ...createAxManagedHostCommandHandlers(),
     desktop_get_runtime_info: () => ({
       appVersion: resolveDesktopAppVersion(),
       runningUnderARM64Translation: isRunningUnderARM64Translation(),

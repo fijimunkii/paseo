@@ -36,7 +36,7 @@ import {
   type HostRuntimeController,
   type HostRuntimeSnapshot,
 } from "@/runtime/host-runtime";
-import type { HostProfile } from "@/types/host-connection";
+import { defaultLifecycle, type HostProfile } from "@/types/host-connection";
 import { useSessionStore, type WorkspaceDescriptor } from "@/stores/session-store";
 import { seedRuntimeWorkspaces } from "@/test/seed-session";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
@@ -147,7 +147,7 @@ function makeHost(): HostProfile {
     serverId: SERVER_ID,
     label: "Render Count Host",
     appearance: defaultHostAppearance(),
-    lifecycle: {},
+    lifecycle: defaultLifecycle(),
     connections: [],
     preferredConnectionId: null,
     createdAt: now,

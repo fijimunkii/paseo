@@ -1633,6 +1633,10 @@ export const ko: TranslationResources = {
         title: "원격 SSH",
         description: "데스크톱 SSH 클라이언트를 통해 연결합니다.",
       },
+      agentExecutor: {
+        title: "Agent Executor (AX)",
+        description: "Provision an isolated Paseo host on an AX cluster.",
+      },
       scanQr: {
         title: "QR 코드 스캔",
         description: "암호화된 릴레이 연결.",
@@ -1640,6 +1644,34 @@ export const ko: TranslationResources = {
       pasteLink: {
         title: "페어링 링크 붙여넣기",
         description: "암호화된 릴레이 연결.",
+      },
+    },
+    agentExecutor: {
+      title: "Agent Executor (AX)",
+      helper:
+        "Provision an isolated Paseo daemon in Google AX and pair it through the encrypted relay without enabling AX debug access.",
+      fields: {
+        task: "Task name",
+        context: "Kubernetes context",
+        namespace: "AX namespace",
+        atespace: "Atespace",
+        repo: "Git repository (optional)",
+        branch: "Git branch (optional)",
+        image: "AX Paseo image",
+        egress: "HTTPS egress hosts (comma separated)",
+        cpuRequest: "CPU request",
+        cpuLimit: "CPU limit",
+        memoryRequest: "Memory request",
+        memoryLimit: "Memory limit",
+      },
+      actions: {
+        cancel: "Cancel",
+        provision: "Provision",
+        provisioning: "Provisioning...",
+      },
+      errors: {
+        required: "Task name and Kubernetes context are required.",
+        egressRequired: "At least one HTTPS egress host is required.",
       },
     },
     direct: {
@@ -2338,6 +2370,31 @@ export const ko: TranslationResources = {
         preview: {
           workspaceName: "내-워크스페이스",
         },
+      },
+      agentExecutor: {
+        title: "Agent Executor (AX)",
+        status: "AX task status",
+        checking: "Checking...",
+        unknown: "Unknown",
+        refresh: "Refresh",
+        context: "Kubernetes context",
+        atespace: "Atespace",
+        task: "Task",
+        workspace: "Workspace",
+        gateway: "Gateway",
+        lifecycle: "Lifecycle",
+        lifecycleHint:
+          "Suspend preserves the AX workspace but restarts the process tree on resume. Destroy removes the AX task, workspace, and gateway.",
+        suspend: "Suspend",
+        suspending: "Suspending...",
+        resume: "Resume",
+        resuming: "Resuming...",
+        destroy: "Destroy AX host",
+        destroying: "Destroying...",
+        destroyTitle: "Destroy {{name}}?",
+        destroyMessage:
+          "This deletes the AX task, durable workspace, and gateway. To keep the AX resources and only forget this host in Paseo, use Remove host below instead.",
+        failed: "AX operation failed",
       },
       notFound: "호스트를 찾을 수 없습니다",
       badges: {

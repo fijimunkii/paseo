@@ -3,7 +3,7 @@ import { DaemonStartService, upsertDesktopDaemonConnection } from "./daemon-star
 import type { HostRuntimeStore } from "./host-runtime";
 import type { DesktopDaemonStatus } from "@/desktop/daemon/desktop-daemon";
 import { defaultHostAppearance } from "@/hosts/appearance";
-import type { HostProfile } from "@/types/host-connection";
+import { defaultLifecycle, type HostProfile } from "@/types/host-connection";
 
 interface RecordedUpsert {
   listenAddress: string;
@@ -48,7 +48,7 @@ function makeRelayOnlyHost(serverId: string): HostProfile {
     serverId,
     label: "Relay host",
     appearance: defaultHostAppearance(),
-    lifecycle: {},
+    lifecycle: defaultLifecycle(),
     connections: [
       {
         id: "relay:relay.example.com",

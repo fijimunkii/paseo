@@ -1,5 +1,6 @@
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { defaultHostAppearance } from "@/hosts/appearance";
+import { defaultLifecycle } from "@/types/host-connection";
 import {
   useSessionStore,
   type ProjectDescriptor,
@@ -48,7 +49,7 @@ export function seedSessionHosts(serverIds: readonly string[]): void {
       serverId,
       label: serverId,
       appearance: defaultHostAppearance(),
-      lifecycle: {},
+      lifecycle: defaultLifecycle(),
       connections: [],
       preferredConnectionId: null,
       createdAt: "2026-09-01T00:00:00.000Z",
